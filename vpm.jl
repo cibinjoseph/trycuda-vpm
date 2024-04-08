@@ -91,7 +91,7 @@ function UJ_direct_map1(sources, Pi, g_dgdr)
     dX = view(Pi, 1:3) .- view(sources.particles, 1:3, :)
     r2 = mapreduce(x->x^2, +, dX, dims=1)
     r = map(sqrt, r2)
-    r3 = map(x->x^3, r)
+    r3 = r.*r2
 
     # Regularizing function and deriv
     rbysigma = map(/, r, view(sources.particles, 7, :))
