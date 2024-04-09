@@ -101,6 +101,25 @@ function bench_vel1_mem!(v, y, x, nblocks_x, nblocks_y)
     end
 end
 
+# check array ops inside kernel
+function cpu_array_kernel!(v, y, x)
+    v .= x.*y
+    v .+= reduce(+, x, dims=2)
+    return nothing
+end
+
+function gpu_array_kernel!(v, y, x)
+    v .= x*y
+    v .+= reduce(+, x, dims=2)
+    return nothing
+end
+
+function bench_array_kernel!(v, y, x, threads, nblocks_x, nblocks_y)
+    CUDA.@sync begin
+        @cuda threads=32 blocks=nblocks_y gpu_array_kernel!(v, y, x)
+    end
+end
+
 n = 2^10
 nf = 43
 T = Float32
@@ -118,12 +137,16 @@ T = Float32
 x = rand(T, nf, n)
 y = rand(T, nf, 1)
 v = rand(T, nf, n)
-@btime cpu_vel1!(v, y, x)
+# @btime cpu_vel1!(v, y, x)
 
-x_d = CuArray(x)
-y_d = CuArray(y)
-v_d = CuArray(v)
+# x_d = CuArray(x)
+# y_d = CuArray(y)
+# v_d = CuArray(v)
 nblocks_x = 1
 nblocks_y = ceil(Int, n/32)
-@btime bench_vel1!(v_d, y_d, x_d, nblocks_x, nblocks_y)
-@btime bench_vel1_mem!(v, y, x, nblocks_x, nblocks_y)
+# @btime bench_vel1!(v_d, y_d, x_d, nblocks_x, nblocks_y)
+# @btime bench_vel1_mem!(v, y, x, nblocks_x, nblocks_y)
+
+@btime cpu_array_kernel!(v, y, x)
+kernel = @cuda launch=false gpu_array_kernel!(v_d, y_d, x_d)
+CUDA.launch_configuration(kernel.fun)
