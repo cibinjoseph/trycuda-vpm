@@ -103,24 +103,23 @@ end
 
 # check array ops inside kernel
 function cpu_array_kernel!(v, y, x)
-    v .= x.*y
-    v .+= reduce(+, x, dims=2)
+    v .= x.*v
+    # y .+= reduce(+, x, dims=2)
+    for i in 1:size(y, 2)
+        for j in 1:size(x, 2)
+            y[i] += x[j]
+        end
+    end
     return nothing
 end
 
 function gpu_array_kernel!(v, y, x)
-    v .= x*y
-    v .+= reduce(+, x, dims=2)
+    v .= map(*, x, v)
+    y .+= reduce(+, x, dims=2)
     return nothing
 end
 
-function bench_array_kernel!(v, y, x, threads, nblocks_x, nblocks_y)
-    CUDA.@sync begin
-        @cuda threads=32 blocks=nblocks_y gpu_array_kernel!(v, y, x)
-    end
-end
-
-n = 2^10
+n = 2^12
 nf = 43
 T = Float32
 
@@ -147,6 +146,13 @@ nblocks_y = ceil(Int, n/32)
 # @btime bench_vel1!(v_d, y_d, x_d, nblocks_x, nblocks_y)
 # @btime bench_vel1_mem!(v, y, x, nblocks_x, nblocks_y)
 
-@btime cpu_array_kernel!(v, y, x)
-kernel = @cuda launch=false gpu_array_kernel!(v_d, y_d, x_d)
-CUDA.launch_configuration(kernel.fun)
+x_d = CuArray(x)
+y_d = CuArray(y)
+v_d = CuArray(v)
+@btime cpu_array_kernel!($v, $y, $x)
+
+# kernel = @cuda launch=false gpu_array_kernel!(v_d, y_d, x_d)
+# CUDA.launch_configuration(kernel.fun)
+
+@btime CUDA.@sync gpu_array_kernel!($v_d, $y_d, $x_d)
+# CUDA.@profile trace=true gpu_array_kernel!(v_d, y_d, x_d)

@@ -85,6 +85,13 @@ function UJ_direct_map(sources, targets, g_dgdr::Function)
     return nothing
 end
 
+function UJ_direct_map(sources, targets, g_dgdr::Function)
+    for target in iterate(targets)
+        UJ_direct_map1(sources, target, g_dgdr)
+    end
+    return nothing
+end
+
 cross3(a, b) = [a[2]*b[3]-a[3]*b[2], a[3]*b[1]-a[1]*b[3], a[1]*b[2]-a[2]*b[1]]
 
 function UJ_direct_map1(sources, Pi, g_dgdr)
