@@ -78,23 +78,23 @@ function UJ_direct(sources, targets, g_dgdr::Function)
 end
 
 # Map reduce version
-function UJ_direct_map(sources, targets, g_dgdr::Function)
+function UJ_direct_map_sources(sources, targets, g_dgdr::Function)
     for target in iterate(targets)
-        UJ_direct_map1(sources, target, g_dgdr)
+        UJ_direct_sources(sources, target, g_dgdr)
     end
     return nothing
 end
 
-function UJ_direct_map(sources, targets, g_dgdr::Function)
-    for target in iterate(targets)
-        UJ_direct_map1(sources, target, g_dgdr)
+function UJ_direct_map_targets(sources, targets, g_dgdr::Function)
+    for source in iterate(sources)
+        UJ_direct_targets(source, targets, g_dgdr)
     end
     return nothing
 end
 
 cross3(a, b) = [a[2]*b[3]-a[3]*b[2], a[3]*b[1]-a[1]*b[3], a[1]*b[2]-a[2]*b[1]]
 
-function UJ_direct_map1(sources, Pi, g_dgdr)
+function UJ_direct_sources(sources, Pi, g_dgdr)
     dX = view(Pi, 1:3) .- view(sources.particles, 1:3, :)
     r2 = mapreduce(x->x^2, +, dX, dims=1)
     r = map(sqrt, r2)
@@ -145,6 +145,55 @@ function UJ_direct_map1(sources, Pi, g_dgdr)
     # j=3
     @views Pi[22] -= Jterm2
     @views Pi[23] += Jterm1
+    return nothing
+end
+
+function UJ_direct_targets(source, targets, g_dgdr::Function)
+    dX = view(targets.particles, 1:3, :) .- view(source, 1:3)
+    r2 = mapreduce(x->x^2, +, dX, dims=1)
+    r = map(sqrt, r2)
+    r3 = r .* r2
+
+    rbysigma = r / view(source, 7)[]
+    g_sgm = map(g_val, rbysigma)
+    dg_sgmdr = map(dg_val, rbysigma)
+
+    # K × Γp
+    crss = zeros(size(dX))
+    for i in 1:size(dX, 2)
+        crss[:, i] = cross3(dX[:, i], view(source, 4:6))
+    end
+    @views crss .= -const4 * crss ./ r3
+
+    @views aux = dg_sgmdr ./ (r * view(source, 7)[]) .- 3*map(/, g_sgm, r2)
+    @views dX .= aux .* dX
+    @views aux1 = -const4 * map(/, g_sgm, r3)
+
+    # U = ∑g_σ(x-xp) * K(x-xp) × Γp
+    @views targets.particles[10:12, :] .+= g_sgm .* crss
+
+    # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
+    # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
+    # j=1
+    @views targets.particles[16:18, :] .+= reshape(dX[1, :], size(r)) .* crss
+    # j=2
+    @views targets.particles[19:21, :] .+= reshape(dX[2, :], size(r)) .* crss
+    # j=3
+    @views targets.particles[22:24, :] .+= reshape(dX[3, :], size(r)) .* crss
+
+    for (i, Pi) in enumerate(iterate(targets))
+        # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
+        # Adds the Kronecker delta term
+        # j=1
+        get_J(Pi)[2] -= aux1[i] * get_Gamma(source)[3]
+        get_J(Pi)[3] += aux1[i] * get_Gamma(source)[2]
+        # j=2
+        get_J(Pi)[4] += aux1[i] * get_Gamma(source)[3]
+        get_J(Pi)[6] -= aux1[i] * get_Gamma(source)[1]
+        # j=3
+        get_J(Pi)[7] -= aux1[i] * get_Gamma(source)[2]
+        get_J(Pi)[8] += aux1[i] * get_Gamma(source)[1]
+    end
     return nothing
 end
 
@@ -199,8 +248,8 @@ targets = ParticleField(nparticles, mat2_orig)
 sources2 = ParticleField(nparticles, deepcopy(mat1_orig))
 targets2 = ParticleField(nparticles, deepcopy(mat2_orig))
 
-UJ_direct(sources, targets, g_dgdr)
-UJ_direct_map(sources2, targets2, g_dgdr)
+UJ_direct_map_sources(sources, targets, g_dgdr)
+UJ_direct_map_targets(sources2, targets2, g_dgdr)
 
 # @btime UJ_simple(sources, targets, g_dgdr)
 
