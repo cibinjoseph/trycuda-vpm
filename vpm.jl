@@ -154,6 +154,7 @@ function UJ_direct_targets(source, targets, g_dgdr::Function)
     r = map(sqrt, r2)
     r3 = r .* r2
 
+    # Regularizing function and deriv
     rbysigma = r / view(source, 7)[]
     g_sgm = map(g_val, rbysigma)
     dg_sgmdr = map(dg_val, rbysigma)
@@ -181,19 +182,19 @@ function UJ_direct_targets(source, targets, g_dgdr::Function)
     # j=3
     @views targets.particles[22:24, :] .+= reshape(dX[3, :], size(r)) .* crss
 
-    for (i, Pi) in enumerate(iterate(targets))
-        # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
-        # Adds the Kronecker delta term
-        # j=1
-        get_J(Pi)[2] -= aux1[i] * get_Gamma(source)[3]
-        get_J(Pi)[3] += aux1[i] * get_Gamma(source)[2]
-        # j=2
-        get_J(Pi)[4] += aux1[i] * get_Gamma(source)[3]
-        get_J(Pi)[6] -= aux1[i] * get_Gamma(source)[1]
-        # j=3
-        get_J(Pi)[7] -= aux1[i] * get_Gamma(source)[2]
-        get_J(Pi)[8] += aux1[i] * get_Gamma(source)[1]
-    end
+    # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
+    # Adds the Kronecker delta term
+    @views Jterm = aux1 .* source[4:6]
+    # j=1
+    @views targets.particles[17, :] .-= Jterm[3, :]
+    @views targets.particles[18, :] .+= Jterm[2, :]
+    # j=2
+    @views targets.particles[19, :] .+= Jterm[3, :]
+    @views targets.particles[21, :] .-= Jterm[1, :]
+    # j=3
+    @views targets.particles[22, :] .-= Jterm[2, :]
+    @views targets.particles[23, :] .+= Jterm[1, :]
+
     return nothing
 end
 
