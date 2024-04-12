@@ -149,7 +149,7 @@ function UJ_direct_sources(sources, Pi, g_dgdr)
 end
 
 function UJ_direct_targets(source, targets, g_dgdr::Function)
-    dX = view(targets.particles, 1:3, :) .- view(source, 1:3)
+    @views dX = targets.particles[1:3, :] .- source[1:3]
     r2 = mapreduce(x->x^2, +, dX, dims=1)
     r = map(sqrt, r2)
     r3 = r .* r2
@@ -160,10 +160,8 @@ function UJ_direct_targets(source, targets, g_dgdr::Function)
     dg_sgmdr = map(dg_val, rbysigma)
 
     # K × Γp
-    crss = zeros(size(dX))
-    for i in 1:size(dX, 2)
-        crss[:, i] = cross3(dX[:, i], view(source, 4:6))
-    end
+    @inline cross_op(v) = [0.0 -v[3] v[2]; v[3] 0.0 -v[1]; -v[2] v[1] 0.0];
+    @views crss = -cross_op(source[4:6]) * dX
     @views crss .= -const4 * crss ./ r3
 
     @views aux = dg_sgmdr ./ (r * view(source, 7)[]) .- 3*map(/, g_sgm, r2)
@@ -249,7 +247,8 @@ targets = ParticleField(nparticles, mat2_orig)
 sources2 = ParticleField(nparticles, deepcopy(mat1_orig))
 targets2 = ParticleField(nparticles, deepcopy(mat2_orig))
 
-UJ_direct_map_sources(sources, targets, g_dgdr)
+UJ_direct(sources, targets, g_dgdr)
+# UJ_direct_map_sources(sources, targets, g_dgdr)
 UJ_direct_map_targets(sources2, targets2, g_dgdr)
 
 # @btime UJ_simple(sources, targets, g_dgdr)
