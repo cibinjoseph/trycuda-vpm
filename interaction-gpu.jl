@@ -88,28 +88,28 @@ function gpu_interact(s, t)
 
     # Loop over each source
     for i = 1:size(s, 2)
-        dX_cpu .= view(t, 1:3, :) .- view(s, 1:3, i)
+        @inbounds dX_cpu .= view(t, 1:3, :) .- view(s, 1:3, i)
         copyto!(dX, dX_cpu)
         r2 .= mapreduce(x->x^2, +, dX, dims=1)
         # r2 .= CUDA.sum(CUDA.abs2, dX, dims=1)
         r .= CUDA.sqrt.(r2)
         r3 = r .* r2
 
-        rbysigma .= r / s_sigma[i]
+        @inbounds rbysigma .= r / s_sigma[i]
         g_sgm .= map(g_val, rbysigma)
         dg_sgm .= map(dg_val, rbysigma)
 
-        copyto!(s_gamma_mat, cross_op(view(s, 4:6, i)))
+        @inbounds copyto!(s_gamma_mat, cross_op(view(s, 4:6, i)))
         crss .= const4 * (s_gamma_mat * dX) ./ r3
 
         U .+= g_sgm .* crss
 
-        aux = dg_sgm ./ (r * s_sigma[i]) .- 3*map(/, g_sgm, r2)
+        @inbounds aux = dg_sgm ./ (r * s_sigma[i]) .- 3*map(/, g_sgm, r2)
         dX .= aux .* dX
 
-        J1 .+= reshape(dX[1, :], size(r)) .* crss
-        J2 .+= reshape(dX[2, :], size(r)) .* crss
-        J3 .+= reshape(dX[3, :], size(r)) .* crss
+        @inbounds J1 .+= reshape(dX[1, :], size(r)) .* crss
+        @inbounds J2 .+= reshape(dX[2, :], size(r)) .* crss
+        @inbounds J3 .+= reshape(dX[3, :], size(r)) .* crss
 
         # aux = -const4 * map(/, g_sgm, r3)
         # Jterm1 = aux * view(s, 4, i)
