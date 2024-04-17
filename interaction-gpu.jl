@@ -58,6 +58,15 @@ function cpu_interact(s, t)
             pt[24] += aux * crss3 * dX3
 
             aux = -const4 * g_sgm/r3
+
+            pt[17] -= aux * ps[6]
+            pt[18] += aux * ps[5]
+
+            pt[19] -= aux * ps[6]
+            pt[21] += aux * ps[4]
+
+            pt[22] -= aux * ps[5]
+            pt[23] += aux * ps[4]
         end
     end
 end
@@ -111,19 +120,18 @@ function gpu_interact(s, t)
         @inbounds J2 .+= reshape(dX[2, :], size(r)) .* crss
         @inbounds J3 .+= reshape(dX[3, :], size(r)) .* crss
 
-        # aux = -const4 * map(/, g_sgm, r3)
-        # Jterm1 = aux * view(s, 4, i)
+        aux .= -const4 * map(/, g_sgm, r3)
+        Jterm1 = aux .* view(s, 4, i)
 
     end
-        # t[10:12, :] .= Array(U)
-        copyto!(t[10:12, :], U)
-        copyto!(t[16:18, :], J1)
-        copyto!(t[19:21, :], J2)
-        copyto!(t[22:24, :], J3)
+    t[10:12, :] .= Array(U)
+    t[16:18, :] .+= Array(J1)
+    t[19:21, :] .+= Array(J2)
+    t[22:24, :] .+= Array(J3)
 end
 
 # ns = 2 .^ collect(4:2:20)
-n = 2^20
+n = 2^14
 nfields = 43
 
 # for n in ns
