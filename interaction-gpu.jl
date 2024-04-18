@@ -23,9 +23,9 @@ function cpu_interact(s, t)
     for ps in eachcol(view(s, :, :))
         for pt in eachcol(view(t, :, :))
             # Operation 1
-            dX1 = ps[1] - pt[1]
-            dX2 = ps[2] - pt[2]
-            dX3 = ps[3] - pt[3]
+            dX1 = pt[1] - ps[1]
+            dX2 = pt[2] - ps[2]
+            dX3 = pt[3] - ps[3]
 
             # Operation 2
             r2 = dX1*dX1 + dX2*dX2 + dX3*dX3
@@ -39,15 +39,15 @@ function cpu_interact(s, t)
             crss2 = -const4 / r^3 * ( dX3*ps[4] - dX1*ps[6] )
             crss3 = -const4 / r^3 * ( dX1*ps[5] - dX2*ps[4] )
 
-            pt[10] += g_sgm * crss1
-            pt[11] += g_sgm * crss2
-            pt[12] += g_sgm * crss3
+            pt[10] += crss1 * g_sgm
+            pt[11] += crss2 * g_sgm
+            pt[12] += crss3 * g_sgm
 
             aux = dg_sgmdr/(ps[7]*r) - 3*g_sgm /r^2
 
             pt[16] += aux * crss1 * dX1
-            pt[17] += aux * crss2 * dX2
-            pt[18] += aux * crss3 * dX3
+            pt[17] += aux * crss2 * dX1
+            pt[18] += aux * crss3 * dX1
 
             pt[19] += aux * crss1 * dX2
             pt[20] += aux * crss2 * dX2
@@ -78,10 +78,10 @@ function gpu_interact(s, t)
 
     dX = CuArray{eltype(t)}(undef, (3, nt))
     crss = similar(dX)
-    U = CUDA.zeros(size(dX))
-    J1 = CUDA.zeros(size(dX))
-    J2 = CUDA.zeros(size(dX))
-    J3 = CUDA.zeros(size(dX))
+    U = CUDA.zeros(Float32, size(dX))
+    J1 = CUDA.zeros(Float32, size(dX))
+    J2 = CUDA.zeros(Float32, size(dX))
+    J3 = CUDA.zeros(Float32, size(dX))
 
     r = CuArray{eltype(t)}(undef, (1, nt))
     r2 = similar(r)
@@ -89,6 +89,11 @@ function gpu_interact(s, t)
     rbysigma = similar(r)
     g_sgm = similar(r)
     dg_sgm = similar(r)
+    aux = similar(r)
+
+    Jterm1 = CUDA.zeros(Float32, size(r))
+    Jterm2 = CUDA.zeros(Float32, size(r))
+    Jterm3 = CUDA.zeros(Float32, size(r))
 
     dX_cpu = Array{eltype(t)}(undef, (3, nt))
 
@@ -111,9 +116,9 @@ function gpu_interact(s, t)
         @inbounds copyto!(s_gamma_mat, cross_op(view(s, 4:6, i)))
         crss .= const4 * (s_gamma_mat * dX) ./ r3
 
-        U .+= g_sgm .* crss
+        U .+= crss .* g_sgm
 
-        @inbounds aux = dg_sgm ./ (r * s_sigma[i]) .- 3*map(/, g_sgm, r2)
+        @inbounds aux .= dg_sgm ./ (r * s_sigma[i]) .- 3*map(/, g_sgm, r2)
         dX .= aux .* dX
 
         @inbounds J1 .+= reshape(dX[1, :], size(r)) .* crss
@@ -121,23 +126,40 @@ function gpu_interact(s, t)
         @inbounds J3 .+= reshape(dX[3, :], size(r)) .* crss
 
         aux .= -const4 * map(/, g_sgm, r3)
-        Jterm1 = aux .* view(s, 4, i)
-
+        @inbounds Jterm1 .+= aux * s[4, i]
+        @inbounds Jterm2 .+= aux * s[5, i]
+        @inbounds Jterm3 .+= aux * s[6, i]
     end
-    t[10:12, :] .= Array(U)
+
+    t[10:12, :] .+= Array(U)
     t[16:18, :] .+= Array(J1)
     t[19:21, :] .+= Array(J2)
     t[22:24, :] .+= Array(J3)
+
+    t[17, :] .-= reshape(Array(Jterm3), size(r, 2))
+    t[18, :] .+= reshape(Array(Jterm2), size(r, 2))
+    t[19, :] .-= reshape(Array(Jterm3), size(r, 2))
+    t[21, :] .+= reshape(Array(Jterm1), size(r, 2))
+    t[22, :] .-= reshape(Array(Jterm2), size(r, 2))
+    t[23, :] .+= reshape(Array(Jterm1), size(r, 2))
+    return
 end
 
 # ns = 2 .^ collect(4:2:20)
-n = 2^14
+n = 2^2
 nfields = 43
 
 # for n in ns
 src, trg, src2, trg2 = get_inputs(n, nfields)
-t_cpu = @benchmark cpu_interact($src, $trg)
-t_gpu = @benchmark CUDA.@sync gpu_interact($src, $trg)
-speedup = mean(t_cpu.times)/mean(t_gpu.times)
-println(n, " ", speedup)
+# t_cpu = @benchmark cpu_interact($src, $trg)
+# t_gpu = @benchmark CUDA.@sync gpu_interact($src2, $trg2)
+# speedup = mean(t_cpu.times)/mean(t_gpu.times)
+# println(n, " ", speedup)
 # end
+#
+# gpu_interact(src, trg)
+
+# Check accuracy
+cpu_interact(src, trg)
+gpu_interact(src2, trg2)
+trg[1:end, :] .- trg2[1:end, :]
