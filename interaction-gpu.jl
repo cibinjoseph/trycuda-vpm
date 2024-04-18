@@ -145,21 +145,19 @@ function gpu_interact(s, t)
     return
 end
 
-# ns = 2 .^ collect(4:2:20)
-n = 2^2
+ns = 2 .^ collect(4:2:20)
+# n = 2^2
 nfields = 43
 
-# for n in ns
-src, trg, src2, trg2 = get_inputs(n, nfields)
-# t_cpu = @benchmark cpu_interact($src, $trg)
-# t_gpu = @benchmark CUDA.@sync gpu_interact($src2, $trg2)
-# speedup = mean(t_cpu.times)/mean(t_gpu.times)
-# println(n, " ", speedup)
-# end
-#
-# gpu_interact(src, trg)
+for n in ns
+    src, trg, src2, trg2 = get_inputs(n, nfields)
+    t_cpu = @benchmark cpu_interact($src, $trg)
+    t_gpu = @benchmark CUDA.@sync gpu_interact($src2, $trg2)
+    speedup = mean(t_cpu.times)/mean(t_gpu.times)
+    println(n, " ", speedup)
+end
 
 # Check accuracy
-cpu_interact(src, trg)
-gpu_interact(src2, trg2)
-trg[1:end, :] .- trg2[1:end, :]
+# cpu_interact(src, trg)
+# gpu_interact(src2, trg2)
+# trg[1:end, :] .- trg2[1:end, :]
