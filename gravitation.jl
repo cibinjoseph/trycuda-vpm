@@ -32,6 +32,8 @@ function cpu_gravity!(s::Matrix{T}, t::Matrix{T}) where T
     end
 end
 
+# Naive implementation
+# Each thread handles a single target and uses global GPU memory
 function gpu_gravity1!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
     idx::Int32 = threadIdx().x+blockIdx().x*(blockDim().x-1)
     stride::Int32 = gridDim().x * blockDim().x
