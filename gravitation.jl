@@ -103,7 +103,7 @@ function benchmark_gpu!(s, t)
 
     CUDA.@sync kernel(s_d, t_d; threads, blocks)
 
-    t[end-2:end, :] .= Array(t_d[end-2:end, :])
+    view(t, 5:7, :) .= Array(t_d[end-2:end, :])
 end
 
 
