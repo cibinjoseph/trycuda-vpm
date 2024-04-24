@@ -35,7 +35,7 @@ end
 # Naive implementation
 # Each thread handles a single target and uses global GPU memory
 function gpu_gravity1!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
-    idx::Int32 = threadIdx().x+blockIdx().x*(blockDim().x-1)
+    idx::Int32 = threadIdx().x+(blockIdx().x-1)*blockDim().x
     stride::Int32 = gridDim().x * blockDim().x
 
     t_size::Int32 = size(t, 2)
@@ -65,7 +65,7 @@ end
 # Better implementation
 # Each thread handles a single target and uses local GPU memory
 function gpu_gravity2!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
-    idx::Int32 = threadIdx().x+blockIdx().x*(blockDim().x-1)
+    idx::Int32 = threadIdx().x+(blockIdx().x-1)*blockDim().x
     stride::Int32 = gridDim().x * blockDim().x
 
     t_size::Int32 = size(t, 2)
