@@ -59,29 +59,29 @@ end
 # Each thread handles a single target and uses local GPU memory
 function gpu_gravity2!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
     ithread::Int32 = threadIdx().x
-    idx::Int32 = ithread+(blockIdx().x-1)*blockDim().x
+    tile_dim::Int32 = blockDim().x
+    itarget::Int32 = ithread+(blockIdx().x-1)*blockDim().x
 
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
 
-    n_tiles::Int32 = t_size/blockDim().x
+    n_tiles::Int32 = t_size/tile_dim
 
-    # Hardcode shared memory size for now
-    sh_mem = CuStaticSharedArray(T, (4, 16))
+    sh_mem = CuDynamicSharedArray(T, (4, tile_dim))
 
     itile::Int32 = 1
     while itile <= n_tiles
         # Each thread will copy source coordinates corresponding to its index into shared memory
-        sh_mem[1, ithread] = s[1, ithread + (itile-1)*blockDim().x]
-        sh_mem[2, ithread] = s[2, ithread + (itile-1)*blockDim().x]
-        sh_mem[3, ithread] = s[3, ithread + (itile-1)*blockDim().x]
-        sh_mem[4, ithread] = s[4, ithread + (itile-1)*blockDim().x]
+        sh_mem[1, ithread] = s[1, ithread + (itile-1)*tile_dim]
+        sh_mem[2, ithread] = s[2, ithread + (itile-1)*tile_dim]
+        sh_mem[3, ithread] = s[3, ithread + (itile-1)*tile_dim]
+        sh_mem[4, ithread] = s[4, ithread + (itile-1)*tile_dim]
         sync_threads()
 
         # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
         isource::Int32 = 1
-        while isource <= blockDim().x
-            interaction!(t, sh_mem, idx, isource)
+        while isource <= tile_dim
+            interaction!(t, sh_mem, itarget, isource)
             isource+= 1
         end
         itile += 1
@@ -121,8 +121,9 @@ function benchmark2_gpu!(s, t)
     p::Int32 = 2^4
     threads = p
     blocks = cld(size(s, 2), p)
+    shmem = sizeof(zeros(Float32, 4, p))
     CUDA.@sync begin
-        @cuda threads=threads blocks=blocks gpu_gravity2!(s_d, t_d)
+        @cuda threads=threads blocks=blocks shmem=shmem gpu_gravity2!(s_d, t_d)
     end
 
     view(t, 5:7, :) .= Array(t_d[end-2:end, :])
