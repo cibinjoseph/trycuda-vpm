@@ -15,19 +15,23 @@ function get_inputs(nparticles, nfields; seed=1234, T=Float32)
     return src, trg, src2, trg2
 end
 
+@inline function interaction!(t, s, i, j)
+    @inbounds r_1 = s[1, j] - t[1, i]
+    @inbounds r_2 = s[2, j] - t[2, i]
+    @inbounds r_3 = s[3, j] - t[3, i]
+    r_sqr = r_1*r_1 + r_2*r_2 + r_3*r_3 + eps2
+    r_cube = r_sqr*r_sqr*r_sqr
+    @inbounds mag = s[4, j] / sqrt(r_cube)
+
+    @inbounds t[5, i] += r_1*mag
+    @inbounds t[6, i] += r_2*mag
+    @inbounds t[7, i] += r_3*mag
+end
+
 function cpu_gravity!(s, t)
     for i in 1:size(t, 2)
         for j in 1:size(s, 2)
-            r_1 = s[1, j] - t[1, i]
-            r_2 = s[2, j] - t[2, i]
-            r_3 = s[3, j] - t[3, i]
-            r_sqr = r_1*r_1 + r_2*r_2 + r_3*r_3 + eps2
-            r_cube = r_sqr*r_sqr*r_sqr
-            mag = s[4, j] / sqrt(r_cube)
-
-            t[5, i] += r_1*mag
-            t[6, i] += r_2*mag
-            t[7, i] += r_3*mag
+            interaction!(t, s, i, j)
         end
     end
 end
@@ -45,16 +49,7 @@ function gpu_gravity1!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
     while i <= t_size
         j::Int32 = 1
         while j <= s_size
-            @inbounds r_1 = s[1, j] - t[1, i]
-            @inbounds r_2 = s[2, j] - t[2, i]
-            @inbounds r_3 = s[3, j] - t[3, i]
-            r_sqr = r_1*r_1 + r_2*r_2 + r_3*r_3 + eps2
-            r_cube = r_sqr*r_sqr*r_sqr
-            @inbounds mag = s[4, j] / sqrt(r_cube)
-
-            @inbounds t[5, i] += r_1*mag
-            @inbounds t[6, i] += r_2*mag
-            @inbounds t[7, i] += r_3*mag
+            interaction!(t, s, i, j)
             j += 1
         end
         i += stride
@@ -75,16 +70,7 @@ function gpu_gravity2!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
     while i <= t_size
         j::Int32 = 1
         while j <= s_size
-            @inbounds r_1 = s[1, j] - t[1, i]
-            @inbounds r_2 = s[2, j] - t[2, i]
-            @inbounds r_3 = s[3, j] - t[3, i]
-            r_sqr = r_1*r_1 + r_2*r_2 + r_3*r_3 + eps2
-            r_cube = r_sqr*r_sqr*r_sqr
-            @inbounds mag = s[4, j] / sqrt(r_cube)
-
-            @inbounds t[5, i] += r_1*mag
-            @inbounds t[6, i] += r_2*mag
-            @inbounds t[7, i] += r_3*mag
+            interaction!(t, s, i, j)
             j += 1
         end
         i += stride
