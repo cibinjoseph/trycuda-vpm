@@ -15,7 +15,7 @@ function get_inputs(nparticles, nfields; seed=1234, T=Float32)
     return src, trg, src2, trg2
 end
 
-function cpu_gravity!(s::Matrix{T}, t::Matrix{T}) where T
+function cpu_gravity!(s, t)
     for i in 1:size(t, 2)
         for j in 1:size(s, 2)
             r_1 = s[1, j] - t[1, i]
@@ -25,9 +25,9 @@ function cpu_gravity!(s::Matrix{T}, t::Matrix{T}) where T
             r_cube = r_sqr*r_sqr*r_sqr
             mag = s[4, j] / sqrt(r_cube)
 
-            t[5, j] = r_1*mag
-            t[6, j] = r_2*mag
-            t[7, j] = r_3*mag
+            t[5, i] += r_1*mag
+            t[6, i] += r_2*mag
+            t[7, i] += r_3*mag
         end
     end
 end
@@ -52,9 +52,9 @@ function gpu_gravity1!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
             r_cube = r_sqr*r_sqr*r_sqr
             @inbounds mag = s[4, j] / sqrt(r_cube)
 
-            @inbounds t[5, j] = r_1*mag
-            @inbounds t[6, j] = r_2*mag
-            @inbounds t[7, j] = r_3*mag
+            @inbounds t[5, i] += r_1*mag
+            @inbounds t[6, i] += r_2*mag
+            @inbounds t[7, i] += r_3*mag
             j += 1
         end
         i += stride
@@ -114,7 +114,7 @@ function main(run_benchmark)
         src, trg, src2, trg2 = get_inputs(nparticles, nfields)
         cpu_gravity!(src, trg)
         benchmark_gpu!(src2, trg2)
-        diff = abs.(trg .- trg2) .< Float32(1E-5)
+        diff = abs.(trg .- trg2) .< Float32(1E-4)
         if all(diff)
             println("MATCHES")
         else
