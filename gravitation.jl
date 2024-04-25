@@ -40,19 +40,17 @@ end
 # Each thread handles a single target and uses global GPU memory
 function gpu_gravity1!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
     idx::Int32 = threadIdx().x+(blockIdx().x-1)*blockDim().x
-    stride::Int32 = gridDim().x * blockDim().x
 
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
 
     i::Int32 = idx
-    while i <= t_size
+    if i <= t_size
         j::Int32 = 1
         while j <= s_size
             interaction!(t, s, i, j)
             j += 1
         end
-        i += stride
     end
     return
 end
@@ -60,25 +58,39 @@ end
 # Better implementation
 # Each thread handles a single target and uses local GPU memory
 function gpu_gravity2!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
-    idx::Int32 = threadIdx().x+(blockIdx().x-1)*blockDim().x
-    stride::Int32 = gridDim().x * blockDim().x
+    ithread::Int32 = threadIdx().x
+    idx::Int32 = ithread+(blockIdx().x-1)*blockDim().x
 
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
 
-    i::Int32 = idx
-    while i <= t_size
-        j::Int32 = 1
-        while j <= s_size
-            interaction!(t, s, i, j)
-            j += 1
+    n_tiles::Int32 = t_size/blockDim().x
+
+    # Hardcode shared memory size for now
+    sh_mem = CuStaticSharedArray(T, (4, 16))
+
+    itile::Int32 = 1
+    while itile <= n_tiles
+        # Each thread will copy source coordinates corresponding to its index into shared memory
+        sh_mem[1, ithread] = s[1, ithread + (itile-1)*blockDim().x]
+        sh_mem[2, ithread] = s[2, ithread + (itile-1)*blockDim().x]
+        sh_mem[3, ithread] = s[3, ithread + (itile-1)*blockDim().x]
+        sh_mem[4, ithread] = s[4, ithread + (itile-1)*blockDim().x]
+        sync_threads()
+
+        # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
+        isource::Int32 = 1
+        while isource <= blockDim().x
+            interaction!(t, sh_mem, idx, isource)
+            isource+= 1
         end
-        i += stride
+        itile += 1
+        sync_threads()
     end
     return
 end
 
-function benchmark_gpu!(s, t)
+function benchmark1_gpu!(s, t)
     s_d = CuArray(view(s, 1:4, :))
     t_d = CuArray(t)
 
@@ -92,14 +104,38 @@ function benchmark_gpu!(s, t)
     view(t, 5:7, :) .= Array(t_d[end-2:end, :])
 end
 
+function benchmark2_gpu!(s, t)
+    s_d = CuArray(view(s, 1:4, :))
+    t_d = CuArray(t)
+
+    # kernel = @cuda launch=false gpu_gravity2!(s_d, t_d)
+    # config = launch_configuration(kernel.fun)
+    # threads = min(size(t, 2), config.threads)
+    # blocks = cld(size(t, 2), threads)
+    #
+    # CUDA.@sync kernel(s_d, t_d; threads, blocks)
+
+    # Hardcode num of threads in a tile for now
+    # This should always be less than number of threads in a block (1024)
+    # or limited by memory size
+    p::Int32 = 2^4
+    threads = p
+    blocks = cld(size(s, 2), p)
+    CUDA.@sync begin
+        @cuda threads=threads blocks=blocks gpu_gravity2!(s_d, t_d)
+    end
+
+    view(t, 5:7, :) .= Array(t_d[end-2:end, :])
+end
 
 function main(run_benchmark)
     nfields = 7
     if !run_benchmark
-        nparticles = 200
+        nparticles = 2^6
+        println("No. of particles: $nparticles")
         src, trg, src2, trg2 = get_inputs(nparticles, nfields)
         cpu_gravity!(src, trg)
-        benchmark_gpu!(src2, trg2)
+        benchmark2_gpu!(src2, trg2)
         diff = abs.(trg .- trg2) .< Float32(1E-4)
         if all(diff)
             println("MATCHES")
@@ -112,7 +148,7 @@ function main(run_benchmark)
         for nparticles in ns
             src, trg, src2, trg2 = get_inputs(nparticles, nfields)
             t_cpu = @benchmark cpu_gravity!($src, $trg)
-            t_gpu = @benchmark benchmark_gpu!($src2, $trg2)
+            t_gpu = @benchmark benchmark2_gpu!($src2, $trg2)
             speedup = median(t_cpu.times)/median(t_gpu.times)
             println("$nparticles $speedup")
         end
