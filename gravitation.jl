@@ -82,7 +82,7 @@ function gpu_gravity2!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
         isource::Int32 = 1
         while isource <= tile_dim
             interaction!(t, sh_mem, itarget, isource)
-            isource+= 1
+            isource += 1
         end
         itile += 1
         sync_threads()
@@ -177,8 +177,8 @@ function main(run_option)
     nfields = 7
     if run_option == 1 || run_option == 2
         nparticles = 2^17
-        p::Int32 = min(2^8, nparticles, 1024)
         println("No. of particles: $nparticles")
+        p = min(2^10, nparticles, 1024)
         println("Tile size: $p")
         src, trg, src2, trg2 = get_inputs(nparticles, nfields)
         # cpu_gravity!(src, trg)
@@ -198,9 +198,11 @@ function main(run_option)
     else
         ns = 2 .^ collect(4:1:17)
         for nparticles in ns
+            p = min(2^10, nparticles, 1024)
+            println("Tile size: $p")
             src, trg, src2, trg2 = get_inputs(nparticles, nfields)
             t_cpu = @benchmark cpu_gravity!($src, $trg)
-            t_gpu = @benchmark benchmark2_gpu!($src2, $trg2)
+            t_gpu = @benchmark benchmark2_gpu!($src2, $trg2, $p)
             speedup = median(t_cpu.times)/median(t_gpu.times)
             println("$nparticles $speedup")
         end
