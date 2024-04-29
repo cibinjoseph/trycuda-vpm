@@ -72,10 +72,10 @@ function gpu_gravity2!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
     itile::Int32 = 1
     while itile <= n_tiles
         # Each thread will copy source coordinates corresponding to its index into shared memory
-        sh_mem[1, ithread] = s[1, ithread + (itile-1)*tile_dim]
-        sh_mem[2, ithread] = s[2, ithread + (itile-1)*tile_dim]
-        sh_mem[3, ithread] = s[3, ithread + (itile-1)*tile_dim]
-        sh_mem[4, ithread] = s[4, ithread + (itile-1)*tile_dim]
+        @inbounds sh_mem[1, ithread] = s[1, ithread + (itile-1)*tile_dim]
+        @inbounds sh_mem[2, ithread] = s[2, ithread + (itile-1)*tile_dim]
+        @inbounds sh_mem[3, ithread] = s[3, ithread + (itile-1)*tile_dim]
+        @inbounds sh_mem[4, ithread] = s[4, ithread + (itile-1)*tile_dim]
         sync_threads()
 
         # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
@@ -104,21 +104,13 @@ function benchmark1_gpu!(s, t)
     view(t, 5:7, :) .= Array(t_d[end-2:end, :])
 end
 
-function benchmark2_gpu!(s, t)
+function benchmark2_gpu!(s, t, p)
     s_d = CuArray(view(s, 1:4, :))
     t_d = CuArray(t)
 
-    # kernel = @cuda launch=false gpu_gravity2!(s_d, t_d)
-    # config = launch_configuration(kernel.fun)
-    # threads = min(size(t, 2), config.threads)
-    # blocks = cld(size(t, 2), threads)
-    #
-    # CUDA.@sync kernel(s_d, t_d; threads, blocks)
-
-    # Hardcode num of threads in a tile for now
-    # This should always be less than number of threads in a block (1024)
+    # Num of threads in a tile should always be 
+    # less than number of threads in a block (1024)
     # or limited by memory size
-    p::Int32 = 2^4
     threads = p
     blocks = cld(size(s, 2), p)
     shmem = sizeof(zeros(Float32, 4, p))
@@ -129,23 +121,30 @@ function benchmark2_gpu!(s, t)
     view(t, 5:7, :) .= Array(t_d[end-2:end, :])
 end
 
-function main(run_benchmark)
+function main(run_option)
     nfields = 7
-    if !run_benchmark
-        nparticles = 2^6
+    if run_option == 1 || run_option == 2
+        nparticles = 2^10
+        p::Int32 = min(2^7, nparticles, 1024)
         println("No. of particles: $nparticles")
+        println("Tile size: $p")
         src, trg, src2, trg2 = get_inputs(nparticles, nfields)
         cpu_gravity!(src, trg)
-        benchmark2_gpu!(src2, trg2)
-        diff = abs.(trg .- trg2) .< Float32(1E-4)
-        if all(diff)
-            println("MATCHES")
+        if run_option == 1
+            benchmark2_gpu!(src2, trg2, p)
+            diff = abs.(trg .- trg2) .< Float32(1E-4)
+            if all(diff)
+                println("MATCHES")
+            else
+                println("DOES NOT MATCH!")
+                # display(diff)
+            end
         else
-            println("DOES NOT MATCH!")
-            # display(diff)
+            println("Running profiler...")
+            CUDA.@profile benchmark2_gpu!(src2, trg2, p)
         end
     else
-        ns = 2 .^ collect(1:1:17)
+        ns = 2 .^ collect(4:1:17)
         for nparticles in ns
             src, trg, src2, trg2 = get_inputs(nparticles, nfields)
             t_cpu = @benchmark cpu_gravity!($src, $trg)
@@ -157,5 +156,6 @@ function main(run_benchmark)
     return
 end
 
-run_benchmark = false
-main(run_benchmark)
+# Run_option - # [1]test [2]profile [3]benchmark
+run_option = 2
+main(run_option)
