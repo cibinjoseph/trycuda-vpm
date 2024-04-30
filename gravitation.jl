@@ -28,7 +28,8 @@ end
     @inbounds t[7, i] += r_3*mag
 end
 
-@inline function gpu_interaction!(t, s, i, j, acc1, acc2, acc3)
+@inline function gpu_interaction!(t, s, i, j)
+    acc1, acc2, acc3 = 0.0f0, 0.0f0, 0.0f0
     @inbounds r_1 = s[1, j] - t[1, i]
     @inbounds r_2 = s[2, j] - t[2, i]
     @inbounds r_3 = s[3, j] - t[3, i]
@@ -36,12 +37,11 @@ end
     r_cube = r_sqr*r_sqr*r_sqr
     @inbounds mag = s[4, j] / sqrt(r_cube)
 
-    # @inbounds t[5, i] += r_1*mag
-    # @inbounds t[6, i] += r_2*mag
-    # @inbounds t[7, i] += r_3*mag
+    # Add influence of a source
     acc1 += r_1*mag
     acc2 += r_2*mag
     acc3 += r_3*mag
+    return acc1, acc2, acc3
 end
 
 function cpu_gravity!(s, t)
@@ -92,9 +92,9 @@ function gpu_gravity2!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
 
     sh_mem = CuDynamicSharedArray(T, (4, tile_dim))
 
-    acc1 = 0.0f0
-    acc2 = 0.0f0
-    acc3 = 0.0f0
+    acc1 = zero(T)
+    acc2 = zero(T)
+    acc3 = zero(T)
 
     itile::Int32 = 1
     while itile <= n_tiles
@@ -108,12 +108,19 @@ function gpu_gravity2!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
         # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
         isource::Int32 = 1
         while isource <= tile_dim
-            gpu_interaction!(t, sh_mem, itarget, isource, acc1, acc2, acc3)
+            out = gpu_interaction!(t, sh_mem, itarget, isource)
+
+            # Sum up accelerations for each source in a tile
+            acc1 += out[1]
+            acc2 += out[2]
+            acc3 += out[3]
             isource += 1
         end
         itile += 1
         sync_threads()
     end
+
+    # Sum up accelerations for each target/thread
     t[5, itarget] += acc1
     t[6, itarget] += acc2
     t[7, itarget] += acc3
@@ -206,7 +213,7 @@ end
 function main(run_option)
     nfields = 7
     if run_option == 1 || run_option == 2
-        nparticles = 2^2
+        nparticles = 2^5
         println("No. of particles: $nparticles")
         p = min(2^10, nparticles, 1024)
         println("Tile size: $p")
@@ -218,6 +225,8 @@ function main(run_option)
             if all(diff)
                 println("MATCHES")
             else
+                # display(trg)
+                # display(trg2)
                 println("DOES NOT MATCH!")
                 # display(diff)
             end
