@@ -213,22 +213,27 @@ end
 function main(run_option)
     nfields = 7
     if run_option == 1 || run_option == 2
-        nparticles = 2^5
+        nparticles = 2^16
         println("No. of particles: $nparticles")
-        p = min(2^10, nparticles, 1024)
+        p = min(2^9, nparticles, 1024)
         println("Tile size: $p")
         src, trg, src2, trg2 = get_inputs(nparticles, nfields)
         if run_option == 1
             cpu_gravity!(src, trg)
             benchmark2_gpu!(src2, trg2, p)
-            diff = abs.(trg .- trg2) .< Float32(1E-4)
-            if all(diff)
+            diff = abs.(trg .- trg2)
+            err_norm = sqrt(sum(abs2, diff))
+            diff_bool = diff .< Float32(1E-4)
+            if all(diff_bool)
                 println("MATCHES")
             else
                 # display(trg)
                 # display(trg2)
-                println("DOES NOT MATCH!")
                 # display(diff)
+                n_diff = count(==(false), diff_bool)
+                n_total = 3*size(trg, 2)
+                println("$n_diff of $n_total elements DO NOT MATCH")
+                println("Error norm: $err_norm")
             end
         else
             println("Running profiler...")
@@ -237,7 +242,7 @@ function main(run_option)
     else
         ns = 2 .^ collect(4:1:17)
         for nparticles in ns
-            p = min(2^10, nparticles, 1024)
+            p = min(2^7, nparticles, 1024)
             println("Tile size: $p")
             src, trg, src2, trg2 = get_inputs(nparticles, nfields)
             t_cpu = @benchmark cpu_gravity!($src, $trg)
