@@ -28,6 +28,29 @@ end
     @inbounds t[7, i] += r_3*mag
 end
 
+@inline function gpu_interaction!(t, s, i, j, acc1, acc2, acc3)
+    @inbounds r_1 = s[1, j] - t[1, i]
+    @inbounds r_2 = s[2, j] - t[2, i]
+    @inbounds r_3 = s[3, j] - t[3, i]
+    r_sqr = r_1*r_1 + r_2*r_2 + r_3*r_3 + eps2
+    r_cube = r_sqr*r_sqr*r_sqr
+    @inbounds mag = s[4, j] / sqrt(r_cube)
+
+    # @inbounds t[5, i] += r_1*mag
+    # @inbounds t[6, i] += r_2*mag
+    # @inbounds t[7, i] += r_3*mag
+    acc1 += r_1*mag
+    acc2 += r_2*mag
+    acc3 += r_3*mag
+end
+
+function cpu_gravity!(s, t)
+    for i in 1:size(t, 2)
+        for j in 1:size(s, 2)
+            interaction!(t, s, i, j)
+        end
+    end
+end
 function cpu_gravity!(s, t)
     for i in 1:size(t, 2)
         for j in 1:size(s, 2)
@@ -69,6 +92,10 @@ function gpu_gravity2!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
 
     sh_mem = CuDynamicSharedArray(T, (4, tile_dim))
 
+    acc1 = 0.0
+    acc2 = 0.0
+    acc3 = 0.0
+
     itile::Int32 = 1
     while itile <= n_tiles
         # Each thread will copy source coordinates corresponding to its index into shared memory
@@ -81,7 +108,7 @@ function gpu_gravity2!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
         # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
         isource::Int32 = 1
         while isource <= tile_dim
-            interaction!(t, sh_mem, itarget, isource)
+            gpu_interaction!(t, sh_mem, itarget, isource, acc1, acc2, acc3)
             isource += 1
         end
         itile += 1
@@ -176,12 +203,12 @@ end
 function main(run_option)
     nfields = 7
     if run_option == 1 || run_option == 2
-        nparticles = 2^17
+        nparticles = 2^5
         println("No. of particles: $nparticles")
         p = min(2^10, nparticles, 1024)
         println("Tile size: $p")
         src, trg, src2, trg2 = get_inputs(nparticles, nfields)
-        # cpu_gravity!(src, trg)
+        cpu_gravity!(src, trg)
         if run_option == 1
             benchmark2_gpu!(src2, trg2, p)
             diff = abs.(trg .- trg2) .< Float32(1E-4)
@@ -211,5 +238,5 @@ function main(run_option)
 end
 
 # Run_option - # [1]test [2]profile [3]benchmark
-run_option = 2
+run_option = 1
 main(run_option)
