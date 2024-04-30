@@ -242,7 +242,7 @@ function main(run_option)
     else
         ns = 2 .^ collect(4:1:17)
         for nparticles in ns
-            p = min(2^7, nparticles, 1024)
+            p = min(2^9, nparticles, 1024)
             println("Tile size: $p")
             src, trg, src2, trg2 = get_inputs(nparticles, nfields)
             t_cpu = @benchmark cpu_gravity!($src, $trg)
@@ -255,5 +255,5 @@ function main(run_option)
 end
 
 # Run_option - # [1]test [2]profile [3]benchmark
-run_option = 1
+run_option = 3
 main(run_option)
