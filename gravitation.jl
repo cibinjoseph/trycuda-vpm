@@ -92,9 +92,9 @@ function gpu_gravity2!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
 
     sh_mem = CuDynamicSharedArray(T, (4, tile_dim))
 
-    acc1 = 0.0
-    acc2 = 0.0
-    acc3 = 0.0
+    acc1 = 0.0f0
+    acc2 = 0.0f0
+    acc3 = 0.0f0
 
     itile::Int32 = 1
     while itile <= n_tiles
@@ -114,6 +114,9 @@ function gpu_gravity2!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
         itile += 1
         sync_threads()
     end
+    t[5, itarget] += acc1
+    t[6, itarget] += acc2
+    t[7, itarget] += acc3
     return
 end
 
@@ -203,13 +206,13 @@ end
 function main(run_option)
     nfields = 7
     if run_option == 1 || run_option == 2
-        nparticles = 2^5
+        nparticles = 2^2
         println("No. of particles: $nparticles")
         p = min(2^10, nparticles, 1024)
         println("Tile size: $p")
         src, trg, src2, trg2 = get_inputs(nparticles, nfields)
-        cpu_gravity!(src, trg)
         if run_option == 1
+            cpu_gravity!(src, trg)
             benchmark2_gpu!(src2, trg2, p)
             diff = abs.(trg .- trg2) .< Float32(1E-4)
             if all(diff)
