@@ -255,5 +255,5 @@ function main(run_option)
 end
 
 # Run_option - # [1]test [2]profile [3]benchmark
-run_option = 1
+run_option = 2
 main(run_option)
