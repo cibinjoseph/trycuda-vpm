@@ -256,4 +256,4 @@ end
 
 # Run_option - # [1]test [2]profile [3]benchmark
 run_option = 2
-main(run_option)
+# main(run_option)
