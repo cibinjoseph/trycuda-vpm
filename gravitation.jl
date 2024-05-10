@@ -5,8 +5,8 @@ using Statistics
 
 const eps2 = 1e-6
 
-function get_inputs(nparticles, nfields; seed=1234, T=Float32)
-    Random.seed!(seed)
+function get_inputs(nparticles, nfields; T=Float32)
+    Random.seed!(1234)  # This has to be present inside this function
     src = rand(T, nfields, nparticles)
     trg = rand(T, nfields, nparticles)
 
@@ -61,7 +61,7 @@ end
 
 # Naive implementation
 # Each thread handles a single target and uses global GPU memory
-function gpu_gravity1!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
+function gpu_gravity1!(s, t)
     idx::Int32 = threadIdx().x+(blockIdx().x-1)*blockDim().x
 
     t_size::Int32 = size(t, 2)
@@ -80,7 +80,7 @@ end
 
 # Better implementation
 # Each thread handles a single target and uses local GPU memory
-function gpu_gravity2!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
+function gpu_gravity2!(s, t)
     ithread::Int32 = threadIdx().x
     tile_dim::Int32 = blockDim().x
     itarget::Int32 = ithread+(blockIdx().x-1)*blockDim().x
@@ -90,11 +90,11 @@ function gpu_gravity2!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
 
     n_tiles::Int32 = t_size/tile_dim
 
-    sh_mem = CuDynamicSharedArray(T, (4, tile_dim))
+    sh_mem = CuDynamicSharedArray(Float32, (4, tile_dim))
 
-    acc1 = zero(T)
-    acc2 = zero(T)
-    acc3 = zero(T)
+    acc1 = zero(eltype(s))
+    acc2 = zero(eltype(s))
+    acc3 = zero(eltype(s))
 
     itile::Int32 = 1
     while itile <= n_tiles
@@ -185,7 +185,7 @@ function benchmark2_gpu!(s, t, p)
     # or limited by memory size
     threads = p
     blocks = cld(size(s, 2), p)
-    shmem = sizeof(zeros(Float32, 4, p))
+    shmem = sizeof(Float32) * 4 * p
     CUDA.@sync begin
         @cuda threads=threads blocks=blocks shmem=shmem gpu_gravity2!(s_d, t_d)
     end
@@ -213,9 +213,9 @@ end
 function main(run_option)
     nfields = 7
     if run_option == 1 || run_option == 2
-        nparticles = 2^10
+        nparticles = 2^6
         println("No. of particles: $nparticles")
-        p = min(2^7, nparticles, 1024)
+        p = min(2^5, nparticles, 1024)
         println("Tile size: $p")
         src, trg, src2, trg2 = get_inputs(nparticles, nfields)
         if run_option == 1
@@ -255,5 +255,5 @@ function main(run_option)
 end
 
 # Run_option - # [1]test [2]profile [3]benchmark
-run_option = 2
+run_option = 1
 # main(run_option)
