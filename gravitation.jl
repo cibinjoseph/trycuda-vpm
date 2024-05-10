@@ -202,7 +202,7 @@ function benchmark3_gpu!(s, t, p)
     # or limited by memory size
     threads = p
     blocks = cld(size(s, 2), p)
-    shmem = sizeof(zeros(Float32, 4, p))
+    shmem = sizeof(Float32) * 4 * p
     CUDA.@sync begin
         @cuda threads=threads blocks=blocks shmem=shmem gpu_gravity3!(s_d, t_d)
     end
@@ -237,7 +237,7 @@ function main(run_option)
             end
         else
             println("Running profiler...")
-            CUDA.@profile external=true benchmark2_gpu!(src2, trg2, p)
+            CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p)
         end
     else
         ns = 2 .^ collect(4:1:17)
@@ -256,4 +256,4 @@ end
 
 # Run_option - # [1]test [2]profile [3]benchmark
 run_option = 1
-# main(run_option)
+main(run_option)
