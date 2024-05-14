@@ -129,9 +129,9 @@ end
 
 # Each thread handles a single target and uses local GPU memory
 # Multiple block dimensions for spatial dimensions
-function gpu_gravity3!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
+function gpu_gravity3!(s, t)
     ithread::Int32 = threadIdx().x
-    tile_dim::Int32 = blockDim().x
+    tile_dim::Int32 = blockDim().x * blockDim().y
     itarget::Int32 = ithread+(blockIdx().x-1)*blockDim().x
 
     t_size::Int32 = size(t, 2)
@@ -139,26 +139,43 @@ function gpu_gravity3!(s::CuDeviceMatrix{T}, t::CuDeviceMatrix{T}) where T
 
     n_tiles::Int32 = t_size/tile_dim
 
-    sh_mem = CuDynamicSharedArray(T, (4, tile_dim))
+    sh_mem = CuDynamicSharedArray(Float32, (4, tile_dim))
+
+    acc1 = zero(eltype(s))
+    acc2 = zero(eltype(s))
+    acc3 = zero(eltype(s))
+
+    # Offset for accessing shared memory within the block
+    tybx = threadIdx().y * blockDim().x
 
     itile::Int32 = 1
     while itile <= n_tiles
         # Each thread will copy source coordinates corresponding to its index into shared memory
-        @inbounds sh_mem[1, ithread] = s[1, ithread + (itile-1)*tile_dim]
-        @inbounds sh_mem[2, ithread] = s[2, ithread + (itile-1)*tile_dim]
-        @inbounds sh_mem[3, ithread] = s[3, ithread + (itile-1)*tile_dim]
-        @inbounds sh_mem[4, ithread] = s[4, ithread + (itile-1)*tile_dim]
+        @inbounds sh_mem[1, ithread + tybx] = s[1, ithread + tybx + (itile-1)*tile_dim]
+        @inbounds sh_mem[2, ithread + tybx] = s[2, ithread + tybx + (itile-1)*tile_dim]
+        @inbounds sh_mem[3, ithread + tybx] = s[3, ithread + tybx + (itile-1)*tile_dim]
+        @inbounds sh_mem[4, ithread + tybx] = s[4, ithread + tybx + (itile-1)*tile_dim]
         sync_threads()
 
         # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
         isource::Int32 = 1
-        while isource <= tile_dim
-            interaction!(t, sh_mem, itarget, isource)
-            isource+= 1
+        while isource <= blockDim().x
+            out = gpu_interaction!(t, sh_mem, itarget, tybx + isource)
+
+            # Sum up accelerations for each source in a tile
+            acc1 += out[1]
+            acc2 += out[2]
+            acc3 += out[3]
+            isource += 1
         end
         itile += 1
         sync_threads()
     end
+
+    # Sum up accelerations for each target/thread
+    t[5, itarget] += acc1
+    t[6, itarget] += acc2
+    t[7, itarget] += acc3
     return
 end
 
