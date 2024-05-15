@@ -146,7 +146,7 @@ function gpu_gravity3!(s, t)
     acc3 = zero(eltype(s))
 
     # Offset for accessing shared memory within the block
-    tybx = threadIdx().y * blockDim().x
+    tybx = (threadIdx().y-1) * blockDim().x
 
     itile::Int32 = 1
     while itile <= n_tiles
