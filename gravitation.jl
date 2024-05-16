@@ -179,6 +179,69 @@ function gpu_gravity3!(s, t)
     return
 end
 
+# Each thread handles a single target and uses local GPU memory
+function gpu_gravity4!(s, t)
+    ithread::Int32 = threadIdx().x
+    tile_dim::Int32 = blockDim().x
+    itarget::Int32 = ithread+(blockIdx().x-1)*blockDim().x
+
+    t_size::Int32 = size(t, 2)
+    s_size::Int32 = size(s, 2)
+
+    q::Int32 = 1  # No. of segments per row or tile
+    n_tiles::Int32 = t_size/tile_dim
+    segment_size::Int32 = tile_dim/q
+
+    sh_mem = CuDynamicSharedArray(Float32, (4, tile_dim))
+
+    acc1 = zero(eltype(s))
+    acc2 = zero(eltype(s))
+    acc3 = zero(eltype(s))
+
+    itile::Int32 = 1
+    while itile <= n_tiles
+        # Each thread will copy source coordinates corresponding to its index into shared memory
+        idx::Int32 = ithread + (itile-1)*tile_dim
+        @inbounds sh_mem[1, ithread] = s[1, idx]
+        @inbounds sh_mem[2, ithread] = s[2, idx]
+        @inbounds sh_mem[3, ithread] = s[3, idx]
+        @inbounds sh_mem[4, ithread] = s[4, idx]
+        sync_threads()
+
+        # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
+        i_segment::Int32 = 1
+        while i_segment <= q
+            i_source::Int32 = (i_segment-1) * segment_size + 1
+            segment_end::Int32 = i_source + segment_size - 1
+            out1 = 0.0f0
+            out2 = 0.0f0
+            out3 = 0.0f0
+            while i_source <= segment_end
+                out_vec = gpu_interaction!(t, sh_mem, itarget, i_source)
+
+                out1 += out_vec[1]
+                out2 += out_vec[2]
+                out3 += out_vec[3]
+                i_source += 1
+            end
+
+            # Sum up accelerations for each source in a tile
+            acc1 += out1
+            acc2 += out2
+            acc3 += out3
+            i_segment += 1
+        end
+        itile += 1
+        sync_threads()
+    end
+
+    # Sum up accelerations for each target/thread
+    t[5, itarget] += acc1
+    t[6, itarget] += acc2
+    t[7, itarget] += acc3
+    return
+end
+
 function benchmark1_gpu!(s, t)
     s_d = CuArray(view(s, 1:4, :))
     t_d = CuArray(t)
