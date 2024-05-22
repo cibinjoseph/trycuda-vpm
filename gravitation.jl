@@ -137,12 +137,12 @@ function gpu_gravity3!(s, t)
 
     # Row and column indices of threads in a block
     row = (ithread-1) % tile_dim + 1
-    @cushow col = floor(Int32, (ithread-1)/tile_dim) + 1
+    col = floor(Int32, (ithread-1)/tile_dim) + 1
 
     itarget::Int32 = row + (blockIdx().x-1)*tile_dim
 
     # This is hard-coded for now
-    num_cols::Int32 = 2
+    num_cols::Int32 = 1
 
     n_tiles::Int32 = t_size/tile_dim
     bodies_per_col::Int32 = tile_dim / num_cols
@@ -170,6 +170,7 @@ function gpu_gravity3!(s, t)
         while i <= bodies_per_col
             i_source::Int32 = i + bodies_per_col*(col-1)
             out = gpu_interaction!(t, sh_mem, itarget, i_source)
+            @cushow i_source, out[1], out[2], out[3]
 
             # Sum up accelerations for each source in a tile
             acc1 += out[1]
@@ -239,10 +240,10 @@ end
 function main(run_option)
     nfields = 7
     if run_option == 1 || run_option == 2
-        nparticles = 2^3
+        nparticles = 2^2
         println("No. of particles: $nparticles")
-        p = min(2^2, nparticles, 1024)
-        q = 2
+        p = min(2, nparticles, 1024)
+        q = 1
         println("Tile size: $p")
         println("Cols per tile: $q")
         src, trg, src2, trg2 = get_inputs(nparticles, nfields)
@@ -255,9 +256,11 @@ function main(run_option)
             if all(diff_bool)
                 println("MATCHES")
             else
-                # display(trg)
-                # display(trg2)
-                # display(diff)
+                if nparticles < 10
+                    # display(trg)
+                    # display(trg2)
+                    # display(diff)
+                end
                 n_diff = count(==(false), diff_bool)
                 n_total = 3*size(trg, 2)
                 println("$n_diff of $n_total elements DO NOT MATCH")
