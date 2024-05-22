@@ -128,7 +128,7 @@ function gpu_gravity2!(s, t)
 end
 
 # Each thread handles a single target and uses local GPU memory
-function gpu_gravity3!(s, t)
+function gpu_gravity3!(s, t, num_cols)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
 
@@ -140,9 +140,6 @@ function gpu_gravity3!(s, t)
     col = floor(Int32, (ithread-1)/tile_dim) + 1
 
     itarget::Int32 = row + (blockIdx().x-1)*tile_dim
-
-    # This is hard-coded for now
-    num_cols::Int32 = 1
 
     n_tiles::Int32 = t_size/tile_dim
     bodies_per_col::Int32 = tile_dim / num_cols
@@ -231,7 +228,7 @@ function benchmark3_gpu!(s, t, p, q)
     blocks::Int32 = cld(size(s, 2), p)
     shmem = sizeof(Float32) * 4 * p
     CUDA.@sync begin
-        @cuda threads=threads blocks=blocks shmem=shmem gpu_gravity3!(s_d, t_d)
+        @cuda threads=threads blocks=blocks shmem=shmem gpu_gravity3!(s_d, t_d, q)
     end
 
     view(t, 5:7, :) .= Array(t_d[end-2:end, :])
@@ -243,7 +240,7 @@ function main(run_option)
         nparticles = 2^2
         println("No. of particles: $nparticles")
         p = min(2, nparticles, 1024)
-        q = 1
+        q = 2
         println("Tile size: $p")
         println("Cols per tile: $q")
         src, trg, src2, trg2 = get_inputs(nparticles, nfields)
