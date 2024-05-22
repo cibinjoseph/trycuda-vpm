@@ -169,9 +169,9 @@ function gpu_gravity3!(s, t, num_cols)
             out = gpu_interaction!(t, sh_mem, itarget, i_source)
 
             # Sum up accelerations for each source in a tile
-            acc1 += out[1]
-            acc2 += out[2]
-            acc3 += out[3]
+            @inbounds acc1 += out[1]
+            @inbounds acc2 += out[2]
+            @inbounds acc3 += out[3]
             i += 1
         end
         itile += 1
@@ -179,9 +179,9 @@ function gpu_gravity3!(s, t, num_cols)
     end
 
     # Sum up accelerations for each target/thread
-    CUDA.@atomic t[5, itarget] += acc1
-    CUDA.@atomic t[6, itarget] += acc2
-    CUDA.@atomic t[7, itarget] += acc3
+    @inbounds CUDA.@atomic t[5, itarget] += acc1
+    @inbounds CUDA.@atomic t[6, itarget] += acc2
+    @inbounds CUDA.@atomic t[7, itarget] += acc3
     return
 end
 
@@ -236,10 +236,10 @@ end
 function main(run_option)
     nfields = 7
     if run_option == 1 || run_option == 2
-        nparticles = 2^2
+        nparticles = 2^9
         println("No. of particles: $nparticles")
-        p = min(2, nparticles, 1024)
-        q = 2
+        p = min(2^6, nparticles, 1024)
+        q = 2^4
         println("Tile size: $p")
         println("Cols per tile: $q")
         src, trg, src2, trg2 = get_inputs(nparticles, nfields)
@@ -247,15 +247,15 @@ function main(run_option)
             cpu_gravity!(src, trg)
             benchmark3_gpu!(src2, trg2, p, q)
             diff = abs.(trg .- trg2)
-            err_norm = sqrt(sum(abs2, diff))
+            err_norm = sqrt(sum(abs2, diff)/length(diff))
             diff_bool = diff .< Float32(1E-4)
             if all(diff_bool)
                 println("MATCHES")
             else
                 if nparticles < 10
-                    # display(trg)
-                    # display(trg2)
-                    # display(diff)
+                    display(trg)
+                    display(trg2)
+                    display(diff)
                 end
                 n_diff = count(==(false), diff_bool)
                 n_total = 3*size(trg, 2)
@@ -264,16 +264,17 @@ function main(run_option)
             end
         else
             println("Running profiler...")
-            CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p)
+            CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q)
         end
     else
         ns = 2 .^ collect(4:1:17)
         for nparticles in ns
             p = min(2^9, nparticles, 1024)
+            q = 2^3
             println("Tile size: $p")
             src, trg, src2, trg2 = get_inputs(nparticles, nfields)
             t_cpu = @benchmark cpu_gravity!($src, $trg)
-            t_gpu = @benchmark benchmark2_gpu!($src2, $trg2, $p)
+            t_gpu = @benchmark benchmark2_gpu!($src2, $trg2, $p, $q)
             speedup = median(t_cpu.times)/median(t_gpu.times)
             println("$nparticles $speedup")
         end
