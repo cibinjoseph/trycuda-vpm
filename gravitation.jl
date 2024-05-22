@@ -167,7 +167,6 @@ function gpu_gravity3!(s, t, num_cols)
         while i <= bodies_per_col
             i_source::Int32 = i + bodies_per_col*(col-1)
             out = gpu_interaction!(t, sh_mem, itarget, i_source)
-            @cushow i_source, out[1], out[2], out[3]
 
             # Sum up accelerations for each source in a tile
             acc1 += out[1]
@@ -180,9 +179,9 @@ function gpu_gravity3!(s, t, num_cols)
     end
 
     # Sum up accelerations for each target/thread
-    t[5, itarget] += acc1
-    t[6, itarget] += acc2
-    t[7, itarget] += acc3
+    CUDA.@atomic t[5, itarget] += acc1
+    CUDA.@atomic t[6, itarget] += acc2
+    CUDA.@atomic t[7, itarget] += acc3
     return
 end
 
