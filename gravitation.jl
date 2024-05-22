@@ -90,7 +90,6 @@ function gpu_gravity2!(s, t)
 
     n_tiles::Int32 = t_size/tile_dim
 
-    @cushow tile_dim
     sh_mem = CuDynamicSharedArray(Float32, (4, tile_dim))
 
     acc1 = zero(eltype(s))
@@ -130,25 +129,25 @@ end
 
 # Each thread handles a single target and uses local GPU memory
 function gpu_gravity3!(s, t)
+    t_size::Int32 = size(t, 2)
+    s_size::Int32 = size(s, 2)
+
     ithread::Int32 = threadIdx().x
-    tile_dim::Int32 = blockDim().x
+    tile_dim::Int32 = t_size/gridDim().x
 
     # Row and column indices of threads in a block
     row = (ithread-1) % tile_dim + 1
-    col = floor(Int32, (ithread-1)/tile_dim) + 1
+    @cushow col = floor(Int32, (ithread-1)/tile_dim) + 1
 
-    @cushow itarget::Int32 = row + (blockIdx().x-1)*blockDim().x
+    itarget::Int32 = row + (blockIdx().x-1)*tile_dim
 
     # This is hard-coded for now
     num_cols::Int32 = 2
 
-    t_size::Int32 = size(t, 2)
-    s_size::Int32 = size(s, 2)
-
     n_tiles::Int32 = t_size/tile_dim
     bodies_per_col::Int32 = tile_dim / num_cols
 
-    # sh_mem = CuDynamicSharedArray(Float32, (4, tile_dim))
+    sh_mem = CuDynamicSharedArray(Float32, (4, tile_dim))
 
     acc1 = zero(eltype(s))
     acc2 = zero(eltype(s))
@@ -159,10 +158,10 @@ function gpu_gravity3!(s, t)
         # Each thread will copy source coordinates corresponding to its index into shared memory. This will be done for each tile.
         if (col == 1)
             idx::Int32 = row + (itile-1)*tile_dim
-            # @inbounds sh_mem[1, row] = s[1, idx]
-            # @inbounds sh_mem[2, row] = s[2, idx]
-            # @inbounds sh_mem[3, row] = s[3, idx]
-            # @inbounds sh_mem[4, row] = s[4, idx]
+            @inbounds sh_mem[1, row] = s[1, idx]
+            @inbounds sh_mem[2, row] = s[2, idx]
+            @inbounds sh_mem[3, row] = s[3, idx]
+            @inbounds sh_mem[4, row] = s[4, idx]
         end
         sync_threads()
 
@@ -170,12 +169,12 @@ function gpu_gravity3!(s, t)
         i::Int32 = 1
         while i <= bodies_per_col
             i_source::Int32 = i + bodies_per_col*(col-1)
-            # out = gpu_interaction!(t, sh_mem, itarget, i_source)
+            out = gpu_interaction!(t, sh_mem, itarget, i_source)
 
             # Sum up accelerations for each source in a tile
-            # acc1 += out[1]
-            # acc2 += out[2]
-            # acc3 += out[3]
+            acc1 += out[1]
+            acc2 += out[2]
+            acc3 += out[3]
             i += 1
         end
         itile += 1
