@@ -233,15 +233,30 @@ function benchmark3_gpu!(s, t, p, q)
     view(t, 5:7, :) .= Array(t_d[end-2:end, :])
 end
 
+function check_launch(n, p, q)
+    max_threads_per_block = 1024
+
+    @assert p<=n
+    @assert p*q < max_threads_per_block
+    @assert q<=p
+    @assert n%p == 0
+    @assert p%q == 0
+end
+
 function main(run_option)
     nfields = 7
     if run_option == 1 || run_option == 2
-        nparticles = 2^9
+        nparticles = 2^10
         println("No. of particles: $nparticles")
-        p = min(2^6, nparticles, 1024)
-        q = 2^4
-        println("Tile size: $p")
-        println("Cols per tile: $q")
+        # No. of threads in a block
+        p = min(2^1, nparticles, 1024)
+        # No. of columns in a block
+        q = 2^2
+        println("Tile size, p: $p")
+        println("Cols per tile, q: $q")
+
+        check_launch(nparticles, p, q)
+
         src, trg, src2, trg2 = get_inputs(nparticles, nfields)
         if run_option == 1
             cpu_gravity!(src, trg)
@@ -267,14 +282,20 @@ function main(run_option)
             CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q)
         end
     else
-        ns = 2 .^ collect(4:1:17)
+        # ns = 2 .^ collect(4:1:17)
+        ns = [2^6]
         for nparticles in ns
-            p = min(2^9, nparticles, 1024)
-            q = 2^3
-            println("Tile size: $p")
+            p = min(2^6, nparticles, 1024)
+            q = 8
+
+            println("No. of particles: $nparticles")
+            println("Tile size, p: $p")
+            println("Cols per tile, q: $q")
+            check_launch(nparticles, p, q)
+
             src, trg, src2, trg2 = get_inputs(nparticles, nfields)
             t_cpu = @benchmark cpu_gravity!($src, $trg)
-            t_gpu = @benchmark benchmark2_gpu!($src2, $trg2, $p, $q)
+            t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q)
             speedup = median(t_cpu.times)/median(t_gpu.times)
             println("$nparticles $speedup")
         end
@@ -283,5 +304,5 @@ function main(run_option)
 end
 
 # Run_option - # [1]test [2]profile [3]benchmark
-run_option = 1
+run_option = 3
 main(run_option)
