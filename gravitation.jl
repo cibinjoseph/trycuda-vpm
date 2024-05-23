@@ -283,10 +283,10 @@ function main(run_option)
         end
     else
         # ns = 2 .^ collect(4:1:17)
-        ns = [2^6]
+        ns = [2^14]
         for nparticles in ns
-            p = min(2^6, nparticles, 1024)
-            q = 8
+            p = min(2^4, nparticles, 1024)
+            q = 4
 
             println("No. of particles: $nparticles")
             println("Tile size, p: $p")
