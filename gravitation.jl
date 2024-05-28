@@ -28,29 +28,17 @@ end
     @inbounds t[7, i] += r_3*mag
 end
 
-@inline function gpu_interaction!(t, s, i, j)
-    acc1, acc2, acc3 = 0.0f0, 0.0f0, 0.0f0
-    @inbounds r_1 = s[1, j] - t[1, i]
-    @inbounds r_2 = s[2, j] - t[2, i]
-    @inbounds r_3 = s[3, j] - t[3, i]
+@inline function gpu_interaction!(tx, ty, tz, s, j)
+    @inbounds r_1 = s[1, j] - tx
+    @inbounds r_2 = s[2, j] - ty
+    @inbounds r_3 = s[3, j] - tz
     r_sqr = r_1*r_1 + r_2*r_2 + r_3*r_3 + eps2
     r_cube = r_sqr*r_sqr*r_sqr
     @inbounds mag = s[4, j] / sqrt(r_cube)
 
-    # Add influence of a source
-    acc1 += r_1*mag
-    acc2 += r_2*mag
-    acc3 += r_3*mag
-    return acc1, acc2, acc3
+    return r_1*mag, r_2*mag, r_3*mag
 end
 
-function cpu_gravity!(s, t)
-    for i in 1:size(t, 2)
-        for j in 1:size(s, 2)
-            interaction!(t, s, i, j)
-        end
-    end
-end
 function cpu_gravity!(s, t)
     for i in 1:size(t, 2)
         for j in 1:size(s, 2)
@@ -83,7 +71,11 @@ end
 function gpu_gravity2!(s, t)
     ithread::Int32 = threadIdx().x
     tile_dim::Int32 = blockDim().x
+
     itarget::Int32 = ithread+(blockIdx().x-1)*blockDim().x
+    @inbounds tx = t[1, itarget]
+    @inbounds ty = t[2, itarget]
+    @inbounds tz = t[3, itarget]
 
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
@@ -108,7 +100,7 @@ function gpu_gravity2!(s, t)
         # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
         isource::Int32 = 1
         while isource <= tile_dim
-            out = gpu_interaction!(t, sh_mem, itarget, isource)
+            out = gpu_interaction!(tx, ty, tz, sh_mem, isource)
 
             # Sum up accelerations for each source in a tile
             acc1 += out[1]
@@ -128,6 +120,7 @@ function gpu_gravity2!(s, t)
 end
 
 # Each thread handles a single target and uses local GPU memory
+# Sources divided into multiple columns and influence is computed by multiple threads
 function gpu_gravity3!(s, t, num_cols)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
@@ -140,11 +133,14 @@ function gpu_gravity3!(s, t, num_cols)
     col = floor(Int32, (ithread-1)/tile_dim) + 1
 
     itarget::Int32 = row + (blockIdx().x-1)*tile_dim
+    @inbounds tx = t[1, itarget]
+    @inbounds ty = t[2, itarget]
+    @inbounds tz = t[3, itarget]
 
     n_tiles::Int32 = t_size/tile_dim
     bodies_per_col::Int32 = tile_dim / num_cols
 
-    sh_mem = CuDynamicSharedArray(Float32, (4, tile_dim))
+    sh_mem = CuDynamicSharedArray(eltype(t), (4, tile_dim))
 
     acc1 = zero(eltype(s))
     acc2 = zero(eltype(s))
@@ -166,7 +162,7 @@ function gpu_gravity3!(s, t, num_cols)
         i::Int32 = 1
         while i <= bodies_per_col
             i_source::Int32 = i + bodies_per_col*(col-1)
-            out = gpu_interaction!(t, sh_mem, itarget, i_source)
+            out = gpu_interaction!(tx, ty, tz, sh_mem, i_source)
 
             # Sum up accelerations for each source in a tile
             @inbounds acc1 += out[1]
@@ -208,7 +204,7 @@ function benchmark2_gpu!(s, t, p)
     # or limited by memory size
     threads = p
     blocks = cld(size(s, 2), p)
-    shmem = sizeof(Float32) * 4 * p
+    shmem = sizeof(eltype(t)) * 4 * p
     CUDA.@sync begin
         @cuda threads=threads blocks=blocks shmem=shmem gpu_gravity2!(s_d, t_d)
     end
@@ -225,7 +221,7 @@ function benchmark3_gpu!(s, t, p, q)
     # or limited by memory size
     threads::Int32 = p*q
     blocks::Int32 = cld(size(s, 2), p)
-    shmem = sizeof(Float32) * 4 * p
+    shmem = sizeof(eltype(t)) * 4 * p
     CUDA.@sync begin
         @cuda threads=threads blocks=blocks shmem=shmem gpu_gravity3!(s_d, t_d, q)
     end
@@ -243,27 +239,28 @@ function check_launch(n, p, q)
     @assert p%q == 0
 end
 
-function main(run_option)
+function main(run_option; T=Float32)
     nfields = 7
     if run_option == 1 || run_option == 2
         nparticles = 2^10
         println("No. of particles: $nparticles")
         # No. of threads in a block
-        p = min(2^1, nparticles, 1024)
+        p = min(1, nparticles)
         # No. of columns in a block
-        q = 2^2
+        q = 1
         println("Tile size, p: $p")
         println("Cols per tile, q: $q")
 
         check_launch(nparticles, p, q)
 
-        src, trg, src2, trg2 = get_inputs(nparticles, nfields)
+        src, trg, src2, trg2 = get_inputs(nparticles, nfields; T=T)
         if run_option == 1
             cpu_gravity!(src, trg)
+            # benchmark1_gpu!(src2, trg2)
             benchmark3_gpu!(src2, trg2, p, q)
             diff = abs.(trg .- trg2)
             err_norm = sqrt(sum(abs2, diff)/length(diff))
-            diff_bool = diff .< Float32(1E-4)
+            diff_bool = diff .< eps(T)
             if all(diff_bool)
                 println("MATCHES")
             else
@@ -283,10 +280,10 @@ function main(run_option)
         end
     else
         # ns = 2 .^ collect(4:1:17)
-        ns = [2^14]
+        ns = [2^12]
         for nparticles in ns
             p = min(2^4, nparticles, 1024)
-            q = 4
+            q = 16
 
             println("No. of particles: $nparticles")
             println("Tile size, p: $p")
@@ -304,5 +301,5 @@ function main(run_option)
 end
 
 # Run_option - # [1]test [2]profile [3]benchmark
-run_option = 3
-main(run_option)
+run_option = 1
+main(run_option; T=Float32)
