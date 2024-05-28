@@ -1,277 +1,301 @@
-using Random
 using CUDA
 using BenchmarkTools
+using Random
+using Statistics
 
-include("pfield.jl")
+const eps2 = 1e-6
+const const4 = 0.25/pi
 
-# Winckelmans algebraic kernel
-function g_dgdr(r)
-    aux0 = (r^2 + 1)^2.5
-    # Returns g, dgdr
-    return r^3 * (r^2 + 2.5) / aux0, 7.5 * r^2 / (aux0*(r^2 + 1))
+function get_inputs(nparticles, nfields; T=Float32)
+    Random.seed!(1234)  # This has to be present inside this function
+    src = rand(T, nfields, nparticles)
+    trg = rand(T, nfields, nparticles)
+
+    src2 = deepcopy(src)
+    trg2 = deepcopy(trg)
+    return src, trg, src2, trg2
 end
 
-# Winckelmans algebraic kernel
 @inline g_val(r) = r^3 * (r^2 + 2.5) / (r^2 + 1)^2.5
 @inline dg_val(r) = 7.5 * r^2 / ((r^2 + 1)^2.5*(r^2 + 1))
 
-function UJ_direct(sources, targets, g_dgdr::Function)
-    r = zero(eltype(sources.particles))
-    for Pi in iterate(targets)
-        for Pj in iterate(sources)
+@inline function interaction!(t, s, i, j)
+    @inbounds dX1 = t[1, i] - s[1, j]
+    @inbounds dX2 = t[2, i] - s[2, j]
+    @inbounds dX3 = t[3, i] - s[3, j]
+    r2 = dX1*dX1 + dX2*dX2 + dX3*dX3 + eps2
+    r = sqrt(r2)
+    r3 = r*r2
 
-            dX1 = get_X(Pi)[1] - get_X(Pj)[1]
-            dX2 = get_X(Pi)[2] - get_X(Pj)[2]
-            dX3 = get_X(Pi)[3] - get_X(Pj)[3]
-            r2 = dX1*dX1 + dX2*dX2 + dX3*dX3
-
-            # if !iszero(r2)
-            r = sqrt(r2)
-
-            # Regularizing function and deriv
-            g_sgm, dg_sgmdr = g_dgdr(r/get_sigma(Pj)[])
-
-            # K × Γp
-            crss1 = -const4 / r^3 * ( dX2*get_Gamma(Pj)[3] - dX3*get_Gamma(Pj)[2] )
-            crss2 = -const4 / r^3 * ( dX3*get_Gamma(Pj)[1] - dX1*get_Gamma(Pj)[3] )
-            crss3 = -const4 / r^3 * ( dX1*get_Gamma(Pj)[2] - dX2*get_Gamma(Pj)[1] )
-
-            # U = ∑g_σ(x-xp) * K(x-xp) × Γp
-            get_U(Pi)[1] += g_sgm * crss1
-            get_U(Pi)[2] += g_sgm * crss2
-            get_U(Pi)[3] += g_sgm * crss3
-
-            # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
-            # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
-            aux = dg_sgmdr/(get_sigma(Pj)[]*r) - 3*g_sgm /r^2
-            # j=1
-            get_J(Pi)[1] += aux * crss1 * dX1
-            get_J(Pi)[2] += aux * crss2 * dX1
-            get_J(Pi)[3] += aux * crss3 * dX1
-            # j=2
-            get_J(Pi)[4] += aux * crss1 * dX2
-            get_J(Pi)[5] += aux * crss2 * dX2
-            get_J(Pi)[6] += aux * crss3 * dX2
-            # j=3
-            get_J(Pi)[7] += aux * crss1 * dX3
-            get_J(Pi)[8] += aux * crss2 * dX3
-            get_J(Pi)[9] += aux * crss3 * dX3
-
-            # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
-            # Adds the Kronecker delta term
-            aux = - const4 * g_sgm / r^3
-
-            # j=1
-            get_J(Pi)[2] -= aux * get_Gamma(Pj)[3]
-            get_J(Pi)[3] += aux * get_Gamma(Pj)[2]
-            # j=2
-            get_J(Pi)[4] += aux * get_Gamma(Pj)[3]
-            get_J(Pi)[6] -= aux * get_Gamma(Pj)[1]
-            # j=3
-            get_J(Pi)[7] -= aux * get_Gamma(Pj)[2]
-            get_J(Pi)[8] += aux * get_Gamma(Pj)[1]
-
-            # end
-        end
-    end
-    return nothing
-end
-
-# Map reduce version
-function UJ_direct_map_sources(sources, targets, g_dgdr::Function)
-    for target in iterate(targets)
-        UJ_direct_sources(sources, target, g_dgdr)
-    end
-    return nothing
-end
-
-function UJ_direct_map_targets(sources, targets, g_dgdr::Function)
-    for source in iterate(sources)
-        UJ_direct_targets(source, targets, g_dgdr)
-    end
-    return nothing
-end
-
-cross3(a, b) = [a[2]*b[3]-a[3]*b[2], a[3]*b[1]-a[1]*b[3], a[1]*b[2]-a[2]*b[1]]
-
-function UJ_direct_sources(sources, Pi, g_dgdr)
-    dX = view(Pi, 1:3) .- view(sources.particles, 1:3, :)
-    r2 = mapreduce(x->x^2, +, dX, dims=1)
-    r = map(sqrt, r2)
-    r3 = r.*r2
+    # Mapping to variables
+    @inbounds sigma = s[7, j]
+    @inbounds gam1 = s[4, j]
+    @inbounds gam2 = s[5, j]
+    @inbounds gam3 = s[6, j]
 
     # Regularizing function and deriv
-    rbysigma = map(/, r, view(sources.particles, 7, :))
-    g_sgm = map(g_val, rbysigma)
-    dg_sgmdr = map(dg_val, rbysigma)
-
-    # K × Γp = -Γp × K
-    crss = zeros(size(dX))
-    for i in 1:size(dX, 2)
-        crss[:, i] = cross3(dX[:, i], view(sources.particles, 4:6, i))
-    end
-    @views crss .= -const4*crss./r3
-
-    @views aux = dg_sgmdr./map(*, r, view(sources.particles, 7, :)) .- 3*map(/, g_sgm, r2)
-    # dX[1, :] .*= aux
-    # dX[2, :] .*= aux
-    # dX[3, :] .*= aux
-    @views dX .= aux' .* dX
-    @views aux1 = - const4 * map(/, g_sgm, r3)
-
-    # U = ∑g_σ(x-xp) * K(x-xp) × Γp
-    @views Pi[10:12] .+= reduce(+, g_sgm' .* crss, dims=2)
-
-    # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
-    # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
-    # j=1
-    @views Pi[16:18] .+= reduce(+, dX[1, :]' .* crss, dims=2)
-    # j=2
-    @views Pi[19:21] .+= reduce(+, dX[2, :]' .* crss, dims=2)
-    # j=3
-    @views Pi[22:24] .+= reduce(+, dX[3, :]' .* crss, dims=2)
-
-    # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
-    @views Jterm1 = reduce(+, aux1 .* sources.particles[4, :])
-    @views Jterm2 = reduce(+, aux1 .* sources.particles[5, :])
-    @views Jterm3 = reduce(+, aux1 .* sources.particles[6, :])
-
-    # j=1
-    @views Pi[17] -= Jterm3
-    @views Pi[18] += Jterm2
-    # j=2
-    @views Pi[19] += Jterm3
-    @views Pi[21] -= Jterm1
-    # j=3
-    @views Pi[22] -= Jterm2
-    @views Pi[23] += Jterm1
-    return nothing
-end
-
-function UJ_direct_targets(source, targets, g_dgdr::Function)
-    @views dX = targets.particles[1:3, :] .- source[1:3]
-    r2 = mapreduce(x->x^2, +, dX, dims=1)
-    r = map(sqrt, r2)
-    r3 = r .* r2
-
-    # Regularizing function and deriv
-    rbysigma = r / view(source, 7)[]
-    g_sgm = map(g_val, rbysigma)
-    dg_sgmdr = map(dg_val, rbysigma)
+    g_sgm = g_val(r/sigma)
+    dg_sgmdr = dg_val(r/sigma)
 
     # K × Γp
-    @inline cross_op(v) = [0.0 -v[3] v[2]; v[3] 0.0 -v[1]; -v[2] v[1] 0.0];
-    @views crss = -cross_op(source[4:6]) * dX
-    @views crss .= -const4 * crss ./ r3
-
-    @views aux = dg_sgmdr ./ (r * view(source, 7)[]) .- 3*map(/, g_sgm, r2)
-    @views dX .= aux .* dX
-    @views aux1 = -const4 * map(/, g_sgm, r3)
+    @inbounds crss1 = -const4 / r3 * ( dX2*gam3 - dX3*gam2 ) 
+    @inbounds crss2 = -const4 / r3 * ( dX3*gam1 - dX1*gam3 )
+    @inbounds crss3 = -const4 / r3 * ( dX1*gam2 - dX2*gam1 )
 
     # U = ∑g_σ(x-xp) * K(x-xp) × Γp
-    @views targets.particles[10:12, :] .+= g_sgm .* crss
+    @inbounds t[10, i] += g_sgm * crss1
+    @inbounds t[11, i] += g_sgm * crss2
+    @inbounds t[12, i] += g_sgm * crss3
 
     # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
     # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
+    aux = dg_sgmdr/(sigma*r) - 3*g_sgm /r2
     # j=1
-    @views targets.particles[16:18, :] .+= reshape(dX[1, :], size(r)) .* crss
+    @inbounds t[16, i] += aux * crss1 * dX1
+    @inbounds t[17, i] += aux * crss2 * dX1
+    @inbounds t[18, i] += aux * crss3 * dX1
     # j=2
-    @views targets.particles[19:21, :] .+= reshape(dX[2, :], size(r)) .* crss
+    @inbounds t[19, i] += aux * crss1 * dX2
+    @inbounds t[20, i] += aux * crss2 * dX2
+    @inbounds t[21, i] += aux * crss3 * dX2
     # j=3
-    @views targets.particles[22:24, :] .+= reshape(dX[3, :], size(r)) .* crss
+    @inbounds t[22, i] += aux * crss1 * dX3
+    @inbounds t[23, i] += aux * crss2 * dX3
+    @inbounds t[24, i] += aux * crss3 * dX3
 
     # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
     # Adds the Kronecker delta term
-    @views Jterm = aux1 .* source[4:6]
+    aux = -const4 * g_sgm / r3
+
     # j=1
-    @views targets.particles[17, :] .-= Jterm[3, :]
-    @views targets.particles[18, :] .+= Jterm[2, :]
+    @inbounds t[17, i] -= aux * gam3
+    @inbounds t[18, i] += aux * gam2
     # j=2
-    @views targets.particles[19, :] .+= Jterm[3, :]
-    @views targets.particles[21, :] .-= Jterm[1, :]
+    @inbounds t[19, i] += aux * gam3
+    @inbounds t[21, i] -= aux * gam1
     # j=3
-    @views targets.particles[22, :] .-= Jterm[2, :]
-    @views targets.particles[23, :] .+= Jterm[1, :]
-
-    return nothing
+    @inbounds t[22, i] -= aux * gam2
+    @inbounds t[23, i] += aux * gam1
 end
 
-function UJ_simple(sources, targets, g_dgdr::Function)
-    for Pi in iterate(targets)
-        for Pj in iterate(sources)
-            dX1 = get_X(Pi)[1] - get_X(Pj)[1]
-            dX2 = get_X(Pi)[2] - get_X(Pj)[2]
-            dX3 = get_X(Pi)[3] - get_X(Pj)[3]
-            r2 = dX1*dX1 + dX2*dX2 + dX3*dX3
-            get_X(Pj)[1] = dX1 / r2 
-            get_X(Pj)[2] = dX2 / r2 
-            get_X(Pj)[3] = dX3 / r2 
+@inline function gpu_interaction!(tx, ty, tz, s, j)
+    @inbounds r_1 = s[1, j] - tx
+    @inbounds r_2 = s[2, j] - ty
+    @inbounds r_3 = s[3, j] - tz
+    r_sqr = r_1*r_1 + r_2*r_2 + r_3*r_3 + eps2
+    r_cube = r_sqr*r_sqr*r_sqr
+    @inbounds mag = s[4, j] / sqrt(r_cube)
+
+    return r_1*mag, r_2*mag, r_3*mag
+end
+
+function cpu_gravity!(s, t)
+    for i in 1:size(t, 2)
+        for j in 1:size(s, 2)
+            interaction!(t, s, i, j)
         end
     end
 end
 
-function UJ_simple_gpu(sources, targets, g_dgdr::Function)
-    src = GPUParticleField(sources)
-    trg = GPUParticleField(targets)
-    for Pi in iterate(src)
-        for Pj in iterate(trg)
-            dX = get_X(Pi) - get_X(Pj)
-            r2 = sum(dX.^2)
-            get_X(Pj) .= dX ./ r2 
+# Naive implementation
+# Each thread handles a single target and uses global GPU memory
+function gpu_gravity1!(s, t)
+    idx::Int32 = threadIdx().x+(blockIdx().x-1)*blockDim().x
+
+    t_size::Int32 = size(t, 2)
+    s_size::Int32 = size(s, 2)
+
+    i::Int32 = idx
+    if i <= t_size
+        j::Int32 = 1
+        while j <= s_size
+            interaction!(t, s, i, j)
+            j += 1
         end
     end
-    targets.particles[1:3, :] .= Array(trg.particles[1:3, :])
-    return nothing
+    return
 end
 
-function UJ_simple_gpu2(sources, targets, g_dgdr::Function)
-    dX = CUDA.zeros(3)
-    for i in 1:size(sources.particles, 2)
-        for j in 1:size(targets.particles, 2)
-            dX .= get_X(sources, i) - get_X(targets, j)
-            r2 = sum(dX.^2)
-            get_X(targets, i) .= dX ./ r2 
+# Each thread handles a single target and uses local GPU memory
+# Sources divided into multiple columns and influence is computed by multiple threads
+function gpu_gravity3!(s, t, num_cols)
+    t_size::Int32 = size(t, 2)
+    s_size::Int32 = size(s, 2)
+
+    ithread::Int32 = threadIdx().x
+    tile_dim::Int32 = t_size/gridDim().x
+
+    # Row and column indices of threads in a block
+    row = (ithread-1) % tile_dim + 1
+    col = floor(Int32, (ithread-1)/tile_dim) + 1
+
+    itarget::Int32 = row + (blockIdx().x-1)*tile_dim
+    @inbounds tx = t[1, itarget]
+    @inbounds ty = t[2, itarget]
+    @inbounds tz = t[3, itarget]
+
+    n_tiles::Int32 = t_size/tile_dim
+    bodies_per_col::Int32 = tile_dim / num_cols
+
+    sh_mem = CuDynamicSharedArray(eltype(t), (4, tile_dim))
+
+    acc1 = zero(eltype(s))
+    acc2 = zero(eltype(s))
+    acc3 = zero(eltype(s))
+
+    itile::Int32 = 1
+    while itile <= n_tiles
+        # Each thread will copy source coordinates corresponding to its index into shared memory. This will be done for each tile.
+        if (col == 1)
+            idx::Int32 = row + (itile-1)*tile_dim
+            @inbounds sh_mem[1, row] = s[1, idx]
+            @inbounds sh_mem[2, row] = s[2, idx]
+            @inbounds sh_mem[3, row] = s[3, idx]
+            @inbounds sh_mem[4, row] = s[4, idx]
+        end
+        sync_threads()
+
+        # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
+        i::Int32 = 1
+        while i <= bodies_per_col
+            i_source::Int32 = i + bodies_per_col*(col-1)
+            out = gpu_interaction!(tx, ty, tz, sh_mem, i_source)
+
+            # Sum up accelerations for each source in a tile
+            @inbounds acc1 += out[1]
+            @inbounds acc2 += out[2]
+            @inbounds acc3 += out[3]
+            i += 1
+        end
+        itile += 1
+        sync_threads()
+    end
+
+    # Sum up accelerations for each target/thread
+    @inbounds CUDA.@atomic t[5, itarget] += acc1
+    @inbounds CUDA.@atomic t[6, itarget] += acc2
+    @inbounds CUDA.@atomic t[7, itarget] += acc3
+    return
+end
+
+function benchmark1_gpu!(s, t)
+    s_d = CuArray(view(s, 1:7, :))
+    t_d = CuArray(t)
+
+    kernel = @cuda launch=false gpu_gravity1!(s_d, t_d)
+    config = launch_configuration(kernel.fun)
+    threads = min(size(t, 2), config.threads)
+    blocks = cld(size(t, 2), threads)
+
+    CUDA.@sync kernel(s_d, t_d; threads, blocks)
+
+    view(t, 10:12, :) .= Array(t_d[10:12, :])
+    view(t, 16:24, :) .= Array(t_d[16:24, :])
+end
+
+function benchmark2_gpu!(s, t, p)
+    s_d = CuArray(view(s, 1:4, :))
+    t_d = CuArray(t)
+
+    # Num of threads in a tile should always be 
+    # less than number of threads in a block (1024)
+    # or limited by memory size
+    threads = p
+    blocks = cld(size(s, 2), p)
+    shmem = sizeof(eltype(t)) * 4 * p
+    CUDA.@sync begin
+        @cuda threads=threads blocks=blocks shmem=shmem gpu_gravity2!(s_d, t_d)
+    end
+
+    view(t, 5:7, :) .= Array(t_d[end-2:end, :])
+end
+
+function benchmark3_gpu!(s, t, p, q)
+    s_d = CuArray(view(s, 1:4, :))
+    t_d = CuArray(t)
+
+    # Num of threads in a tile should always be 
+    # less than number of threads in a block (1024)
+    # or limited by memory size
+    threads::Int32 = p*q
+    blocks::Int32 = cld(size(s, 2), p)
+    shmem = sizeof(eltype(t)) * 4 * p
+    CUDA.@sync begin
+        @cuda threads=threads blocks=blocks shmem=shmem gpu_gravity3!(s_d, t_d, q)
+    end
+
+    view(t, 5:7, :) .= Array(t_d[end-2:end, :])
+end
+
+function check_launch(n, p, q)
+    max_threads_per_block = 1024
+
+    @assert p<=n
+    @assert p*q < max_threads_per_block
+    @assert q<=p
+    @assert n%p == 0
+    @assert p%q == 0
+end
+
+function main(run_option; nparticles=2^5, p=1, q=1, T=Float32)
+    nfields = 43
+    if run_option == 1 || run_option == 2
+        println("No. of particles: $nparticles")
+        # No. of threads in a block
+        p = min(p, nparticles)
+        # No. of columns in a block
+        q = 1
+        println("Tile size, p: $p")
+        println("Cols per tile, q: $q")
+
+        check_launch(nparticles, p, q)
+
+        src, trg, src2, trg2 = get_inputs(nparticles, nfields; T=T)
+        if run_option == 1
+            cpu_gravity!(src, trg)
+            benchmark1_gpu!(src2, trg2)
+            # benchmark3_gpu!(src2, trg2, p, q)
+            diff = abs.(trg .- trg2)
+            err_norm = sqrt(sum(abs2, diff)/length(diff))
+            diff_bool = diff .< eps(T)
+            if all(diff_bool)
+                println("MATCHES")
+            else
+                if nparticles < 10
+                    display(trg)
+                    display(trg2)
+                    display(diff)
+                end
+                n_diff = count(==(false), diff_bool)
+                n_total = 3*size(trg, 2)
+                println("$n_diff of $n_total elements DO NOT MATCH")
+                println("Error norm: $err_norm")
+            end
+        else
+            println("Running profiler...")
+            CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q)
+        end
+    else
+        # ns = 2 .^ collect(4:1:17)
+        for np in nparticles
+            p = min(2^4, np, 1024)
+            q = 16
+
+            println("No. of particles: $np")
+            println("Tile size, p: $p")
+            println("Cols per tile, q: $q")
+            check_launch(np, p, q)
+
+            src, trg, src2, trg2 = get_inputs(np, nfields)
+            t_cpu = @benchmark cpu_gravity!($src, $trg)
+            t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q)
+            speedup = median(t_cpu.times)/median(t_gpu.times)
+            println("$np $speedup")
         end
     end
-    return nothing
+    return
 end
 
-function get_inputs(nparticles, nfields; seed=1234)
-    Random.seed!(seed)
-    mat1_orig = rand(nfields, nparticles)
-    mat2_orig = rand(nfields, nparticles)
-
-    sources = ParticleField(nparticles, mat1_orig)
-    targets = ParticleField(nparticles, mat2_orig)
-
-    sources2 = ParticleField(nparticles, deepcopy(mat1_orig))
-    targets2 = ParticleField(nparticles, deepcopy(mat2_orig))
-    return sources, targets, sources2, targets2
-end
-
-nparticles = 5
-
-UJ_direct(sources, targets, g_dgdr)
-# UJ_direct_map_sources(sources, targets, g_dgdr)
-UJ_direct_map_targets(sources2, targets2, g_dgdr)
-
-# @btime UJ_simple(sources, targets, g_dgdr)
-
-# GPU part 1
-# sources2 = ParticleField(nparticles, mat1_orig)
-# targets2 = ParticleField(nparticles, mat2_orig)
-# @btime UJ_simple_gpu(sources2, targets2, g_dgdr)
-
-# GPU part 2
-# sources2 = GPUParticleField(sources)
-# targets2 = GPUParticleField(targets)
-# @btime UJ_simple_gpu2(sources2, targets2, g_dgdr)
-# CUDA.@profile trace=true UJ_simple_gpu2(sources2, targets2, g_dgdr)
-
-# Verify they are the same
-if !all(abs.(targets.particles .- Array(targets2.particles)) .< 1E-10)
-    println("MISMATCH !!!")
-end
-
-# @btime UJ_direct(sources, targets, g_dgdr)
-# @btime UJ_direct_map(sources2, targets2, g_dgdr)
+# Run_option - # [1]test [2]profile [3]benchmark
+main(1; nparticles=2^2, T=Float64)
+# main(3; nparticles=[2^5], T=Float32)
