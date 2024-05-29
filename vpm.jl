@@ -204,9 +204,11 @@ function gpu_vpm3!(s, t, num_cols)
         if (col == 1)
             idx = row + (itile-1)*tile_dim
             idim = 1
-            while idim <= 7
-                @inbounds sh_mem[idim, row] = s[idim, idx]
-                idim += 1
+            if idx <= s_size
+                while idim <= 7
+                    @inbounds sh_mem[idim, row] = s[idim, idx]
+                    idim += 1
+                end
             end
         end
         sync_threads()
@@ -215,7 +217,9 @@ function gpu_vpm3!(s, t, num_cols)
         i = 1
         while i <= bodies_per_col
             isource = i + bodies_per_col*(col-1)
-            out = gpu_interaction!(tx, ty, tz, sh_mem, isource)
+            if isource <= s_size
+                out = gpu_interaction!(tx, ty, tz, sh_mem, isource)
+            end
 
             # Sum up influences for each source in a tile
             idim = 1
@@ -280,11 +284,11 @@ end
 function check_launch(n, p, q)
     max_threads_per_block = 1024
 
-    @assert p <= n
-    @assert p*q < max_threads_per_block
-    @assert q <= p
-    @assert n%p == 0
-    @assert p%q == 0
+    @assert p <= n "p must be less than or equal to n"
+    @assert p*q < max_threads_per_block "p*q must be less than $max_threads_per_block"
+    @assert q <= p "q must be less than or equal to p"
+    @assert n%p == 0 "n must be divisible by p"
+    @assert p%q == 0 "p must be divisible by q"
 end
 
 function main(run_option; n=2^5, p=1, q=1, T=Float32, debug=false)
@@ -340,4 +344,5 @@ end
 
 # Run_option - # [1]test [2]profile [3]benchmark
 # main(3; n=2^10, p=256, T=Float64)
-main(3; n=2^10, p=256, T=Float32)
+# main(1; n=33, p=11, T=Float32)
+main(1; n=130, p=65, q=1, T=Float32)
