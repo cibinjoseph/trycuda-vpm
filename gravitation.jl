@@ -2,6 +2,7 @@ using CUDA
 using BenchmarkTools
 using Random
 using Statistics
+using StaticArrays
 
 const eps2 = 1e-6
 
@@ -142,9 +143,7 @@ function gpu_gravity3!(s, t, num_cols)
 
     sh_mem = CuDynamicSharedArray(eltype(t), (4, tile_dim))
 
-    acc1 = zero(eltype(s))
-    acc2 = zero(eltype(s))
-    acc3 = zero(eltype(s))
+    acc = @MVector zeros(eltype(t), 3)
 
     itile::Int32 = 1
     while itile <= n_tiles
@@ -165,9 +164,7 @@ function gpu_gravity3!(s, t, num_cols)
             out = gpu_interaction!(tx, ty, tz, sh_mem, i_source)
 
             # Sum up accelerations for each source in a tile
-            @inbounds acc1 += out[1]
-            @inbounds acc2 += out[2]
-            @inbounds acc3 += out[3]
+            @inbounds acc .+= out
             i += 1
         end
         itile += 1
@@ -175,9 +172,9 @@ function gpu_gravity3!(s, t, num_cols)
     end
 
     # Sum up accelerations for each target/thread
-    @inbounds CUDA.@atomic t[5, itarget] += acc1
-    @inbounds CUDA.@atomic t[6, itarget] += acc2
-    @inbounds CUDA.@atomic t[7, itarget] += acc3
+    @inbounds CUDA.@atomic t[5, itarget] += acc[1]
+    @inbounds CUDA.@atomic t[6, itarget] += acc[2]
+    @inbounds CUDA.@atomic t[7, itarget] += acc[3]
     return
 end
 
