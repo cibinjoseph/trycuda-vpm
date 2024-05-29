@@ -79,14 +79,62 @@ end
 end
 
 @inline function gpu_interaction!(tx, ty, tz, s, j)
-    @inbounds r_1 = s[1, j] - tx
-    @inbounds r_2 = s[2, j] - ty
-    @inbounds r_3 = s[3, j] - tz
-    r_sqr = r_1*r_1 + r_2*r_2 + r_3*r_3 + eps2
-    r_cube = r_sqr*r_sqr*r_sqr
-    @inbounds mag = s[4, j] / sqrt(r_cube)
+    @inbounds dX1 = tx - s[1, j]
+    @inbounds dX2 = ty - s[2, j]
+    @inbounds dX3 = tz - s[3, j]
+    r2 = dX1*dX1 + dX2*dX2 + dX3*dX3 + eps2
+    r = sqrt(r2)
+    r3 = r*r2
 
-    return r_1*mag, r_2*mag, r_3*mag
+    # Mapping to variables
+    @inbounds sigma = s[7, j]
+    @inbounds gam1 = s[4, j]
+    @inbounds gam2 = s[5, j]
+    @inbounds gam3 = s[6, j]
+
+    # Regularizing function and deriv
+    g_sgm = g_val(r/sigma)
+    dg_sgmdr = dg_val(r/sigma)
+
+    # K × Γp
+    @inbounds crss1 = -const4 / r3 * ( dX2*gam3 - dX3*gam2 ) 
+    @inbounds crss2 = -const4 / r3 * ( dX3*gam1 - dX1*gam3 )
+    @inbounds crss3 = -const4 / r3 * ( dX1*gam2 - dX2*gam1 )
+
+    # U = ∑g_σ(x-xp) * K(x-xp) × Γp
+    @inbounds t[10, i] += g_sgm * crss1
+    @inbounds t[11, i] += g_sgm * crss2
+    @inbounds t[12, i] += g_sgm * crss3
+
+    # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
+    # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
+    aux = dg_sgmdr/(sigma*r) - 3*g_sgm /r2
+    # j=1
+    @inbounds t[16, i] += aux * crss1 * dX1
+    @inbounds t[17, i] += aux * crss2 * dX1
+    @inbounds t[18, i] += aux * crss3 * dX1
+    # j=2
+    @inbounds t[19, i] += aux * crss1 * dX2
+    @inbounds t[20, i] += aux * crss2 * dX2
+    @inbounds t[21, i] += aux * crss3 * dX2
+    # j=3
+    @inbounds t[22, i] += aux * crss1 * dX3
+    @inbounds t[23, i] += aux * crss2 * dX3
+    @inbounds t[24, i] += aux * crss3 * dX3
+
+    # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
+    # Adds the Kronecker delta term
+    aux = -const4 * g_sgm / r3
+
+    # j=1
+    @inbounds t[17, i] -= aux * gam3
+    @inbounds t[18, i] += aux * gam2
+    # j=2
+    @inbounds t[19, i] += aux * gam3
+    @inbounds t[21, i] -= aux * gam1
+    # j=3
+    @inbounds t[22, i] -= aux * gam2
+    @inbounds t[23, i] += aux * gam1
 end
 
 function cpu_gravity!(s, t)
