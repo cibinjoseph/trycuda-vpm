@@ -190,32 +190,43 @@ function gpu_gravity3!(s, t, num_cols)
 
     sh_mem = CuDynamicSharedArray(eltype(t), (7, tile_dim))
 
+    # Variable initialization
     U = @MVector zeros(eltype(t), 3)
     J = @MVector zeros(eltype(t), 9)
+    idim::Int32 = 0
+    idx::Int32 = 0
+    i::Int32 = 0
+    isource::Int32 = 0
 
     itile::Int32 = 1
     while itile <= n_tiles
         # Each thread will copy source coordinates corresponding to its index into shared memory. This will be done for each tile.
         if (col == 1)
-            idx::Int32 = row + (itile-1)*tile_dim
-            for idim::Int32 = 1:7
+            idx = row + (itile-1)*tile_dim
+            idim = 1
+            while idim <= 7
                 @inbounds sh_mem[idim, row] = s[idim, idx]
+                idim += 1
             end
         end
         sync_threads()
 
         # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
-        i::Int32 = 1
+        i = 1
         while i <= bodies_per_col
-            i_source::Int32 = i + bodies_per_col*(col-1)
-            out = gpu_interaction!(tx, ty, tz, sh_mem, i_source)
+            isource = i + bodies_per_col*(col-1)
+            out = gpu_interaction!(tx, ty, tz, sh_mem, isource)
 
-            # Sum up accelerations for each source in a tile
-            for idim::Int32 = 1:3
+            # Sum up influences for each source in a tile
+            idim = 1
+            while idim <= 3
                 @inbounds U[idim] += out[idim]
+                idim += 1
             end
-            for idim::Int32 = 1:9
+            idim = 1
+            while idim <= 9
                 @inbounds J[idim] += out[idim+3]
+                idim += 1
             end
             i += 1
         end
