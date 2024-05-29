@@ -150,7 +150,7 @@ end
 
 # Naive implementation
 # Each thread handles a single target and uses global GPU memory
-function gpu_gravity1!(s, t)
+function gpu_vpm1!(s, t)
     idx::Int32 = threadIdx().x+(blockIdx().x-1)*blockDim().x
 
     t_size::Int32 = size(t, 2)
@@ -169,7 +169,7 @@ end
 
 # Each thread handles a single target and uses local GPU memory
 # Sources divided into multiple columns and influence is computed by multiple threads
-function gpu_gravity3!(s, t, num_cols)
+function gpu_vpm3!(s, t, num_cols)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
 
@@ -248,30 +248,12 @@ function benchmark1_gpu!(s, t)
     s_d = CuArray(view(s, 1:7, :))
     t_d = CuArray(t)
 
-    kernel = @cuda launch=false gpu_gravity1!(s_d, t_d)
+    kernel = @cuda launch=false gpu_vpm1!(s_d, t_d)
     config = launch_configuration(kernel.fun)
     threads = min(size(t, 2), config.threads)
     blocks = cld(size(t, 2), threads)
 
     CUDA.@sync kernel(s_d, t_d; threads, blocks)
-
-    view(t, 10:12, :) .= Array(t_d[10:12, :])
-    view(t, 16:24, :) .= Array(t_d[16:24, :])
-end
-
-function benchmark2_gpu!(s, t, p)
-    s_d = CuArray(view(s, 1:4, :))
-    t_d = CuArray(t)
-
-    # Num of threads in a tile should always be 
-    # less than number of threads in a block (1024)
-    # or limited by memory size
-    threads = p
-    blocks = cld(size(s, 2), p)
-    shmem = sizeof(eltype(t)) * 4 * p
-    CUDA.@sync begin
-        @cuda threads=threads blocks=blocks shmem=shmem gpu_gravity2!(s_d, t_d)
-    end
 
     view(t, 10:12, :) .= Array(t_d[10:12, :])
     view(t, 16:24, :) .= Array(t_d[16:24, :])
@@ -288,7 +270,7 @@ function benchmark3_gpu!(s, t, p, q)
     blocks::Int32 = cld(size(s, 2), p)
     shmem = sizeof(eltype(t)) * 7 * p  # XYZ + UVW + J = 7 variables
     CUDA.@sync begin
-        @cuda threads=threads blocks=blocks shmem=shmem gpu_gravity3!(s_d, t_d, q)
+        @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm3!(s_d, t_d, q)
     end
 
     view(t, 10:12, :) .= Array(t_d[10:12, :])
