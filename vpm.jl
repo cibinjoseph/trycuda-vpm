@@ -7,10 +7,10 @@ using StaticArrays
 const eps2 = 1e-6
 const const4 = 0.25/pi
 
-function get_inputs(nparticles, nfields; T=Float32)
+function get_inputs(n, nfields; T=Float32)
     Random.seed!(1234)  # This has to be present inside this function
-    src = rand(T, nfields, nparticles)
-    trg = rand(T, nfields, nparticles)
+    src = rand(T, nfields, n)
+    trg = rand(T, nfields, n)
 
     src2 = deepcopy(src)
     trg2 = deepcopy(trg)
@@ -287,25 +287,25 @@ end
 function check_launch(n, p, q)
     max_threads_per_block = 1024
 
-    @assert p<=n
+    @assert p <= n
     @assert p*q < max_threads_per_block
-    @assert q<=p
+    @assert q <= p
     @assert n%p == 0
     @assert p%q == 0
 end
 
-function main(run_option; nparticles=2^5, p=1, q=1, T=Float32, debug=false)
+function main(run_option; n=2^5, p=1, q=1, T=Float32, debug=false)
     nfields = 43
     if run_option == 1 || run_option == 2
-        println("No. of particles: $nparticles")
+        println("No. of particles: $n")
         # No. of threads in a block
         # No. of columns in a block
         println("Tile size, p: $p")
         println("Cols per tile, q: $q")
 
-        check_launch(nparticles, p, q)
+        check_launch(n, p, q)
 
-        src, trg, src2, trg2 = get_inputs(nparticles, nfields; T=T)
+        src, trg, src2, trg2 = get_inputs(n, nfields; T=T)
         if run_option == 1
             cpu_gravity!(src, trg)
             # benchmark1_gpu!(src2, trg2)
@@ -316,7 +316,7 @@ function main(run_option; nparticles=2^5, p=1, q=1, T=Float32, debug=false)
             if all(diff_bool)
                 println("MATCHES")
             else
-                if nparticles < 10 && debug
+                if n < 10 && debug
                     display(trg[10:12])
                     display(trg2[10:12])
                     display(diff[10:12])
@@ -331,23 +331,20 @@ function main(run_option; nparticles=2^5, p=1, q=1, T=Float32, debug=false)
             CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q)
         end
     else
-        # ns = 2 .^ collect(4:1:17)
-        for np in nparticles
-            println("No. of particles: $np")
-            println("Tile size, p: $p")
-            println("Cols per tile, q: $q")
-            check_launch(np, p, q)
+        println("No. of particles: $n")
+        println("Tile size, p: $p")
+        println("Cols per tile, q: $q")
+        check_launch(n, p, q)
 
-            src, trg, src2, trg2 = get_inputs(np, nfields)
-            t_cpu = @benchmark cpu_gravity!($src, $trg)
-            t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q)
-            speedup = median(t_cpu.times)/median(t_gpu.times)
-            println("$np $speedup")
-        end
+        src, trg, src2, trg2 = get_inputs(n, nfields)
+        t_cpu = @benchmark cpu_gravity!($src, $trg)
+        t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q)
+        speedup = median(t_cpu.times)/median(t_gpu.times)
+        println("$n $speedup")
     end
     return
 end
 
 # Run_option - # [1]test [2]profile [3]benchmark
-# main(1; nparticles=2^2, p=1, T=Float64)
-main(3; nparticles=[2^5], T=Float32)
+# main(3; n=2^10, p=256, T=Float64)
+main(3; n=2^10, p=256, T=Float32)
