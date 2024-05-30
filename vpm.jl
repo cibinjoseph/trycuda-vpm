@@ -6,6 +6,7 @@ using StaticArrays
 
 const eps2 = 1e-6
 const const4 = 0.25/pi
+const nfields = 43
 
 function get_inputs(n, nfields; T=Float32)
     Random.seed!(1234)  # This has to be present inside this function
@@ -281,8 +282,8 @@ function benchmark3_gpu!(s, t, p, q)
     view(t, 16:24, :) .= Array(t_d[16:24, :])
 end
 
-function check_launch(n, p, q)
-    max_threads_per_block = 1024
+function check_launch(n, p, q; T=Float32)
+    max_threads_per_block = T==Float32 ? 1024 : 256
 
     @assert p <= n "p must be less than or equal to n"
     @assert p*q < max_threads_per_block "p*q must be less than $max_threads_per_block"
@@ -292,15 +293,13 @@ function check_launch(n, p, q)
 end
 
 function main(run_option; n=2^5, p=1, q=1, T=Float32, debug=false)
-    nfields = 43
-    if run_option == 1 || run_option == 2
-        println("No. of particles: $n")
-        # No. of threads in a block
-        # No. of columns in a block
-        println("Tile size, p: $p")
-        println("Cols per tile, q: $q")
+    p = min(p, n)
+    println("No. of particles: $n")
+    println("Tile size, p: $p")
+    println("Cols per tile, q: $q")
 
-        check_launch(n, p, q)
+    if run_option == 1 || run_option == 2
+        check_launch(n, p, q; T=T)
 
         src, trg, src2, trg2 = get_inputs(n, nfields; T=T)
         if run_option == 1
@@ -328,9 +327,6 @@ function main(run_option; n=2^5, p=1, q=1, T=Float32, debug=false)
             CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q)
         end
     else
-        println("No. of particles: $n")
-        println("Tile size, p: $p")
-        println("Cols per tile, q: $q")
         check_launch(n, p, q)
 
         src, trg, src2, trg2 = get_inputs(n, nfields)
@@ -343,6 +339,8 @@ function main(run_option; n=2^5, p=1, q=1, T=Float32, debug=false)
 end
 
 # Run_option - # [1]test [2]profile [3]benchmark
-# main(3; n=2^10, p=256, T=Float64)
+for i in 7:17
+    main(3; n=2^i, p=256, T=Float32)
+end
 # main(1; n=33, p=11, T=Float32)
-main(1; n=130, p=65, q=1, T=Float32)
+# main(1; n=130, p=26, q=2, T=Float64)
