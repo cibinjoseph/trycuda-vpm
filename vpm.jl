@@ -8,6 +8,9 @@ const eps2 = 1e-6
 const const4 = 0.25/pi
 const nfields = 43
 
+# Definitions for GPU erf() function
+include("my_erf.jl")
+
 function get_inputs(n, nfields; T=Float32)
     Random.seed!(1234)  # This has to be present inside this function
     src = rand(T, nfields, n)
@@ -36,8 +39,9 @@ end
     @inbounds sigma = s[7, j]
 
     # Regularizing function and deriv
-    g_sgm = g_val(r/sigma)
-    dg_sgmdr = dg_val(r/sigma)
+    # g_sgm = g_val(r/sigma)
+    # dg_sgmdr = dg_val(r/sigma)
+    g_sgm, dg_sgmdr = cpu_g_dgdr(r/sigma)
 
     # K × Γp
     @inbounds crss1 = -const4 / r3 * ( dX2*gam3 - dX3*gam2 ) 
@@ -95,8 +99,9 @@ end
     @inbounds sigma = s[7, j]
 
     # Regularizing function and deriv
-    g_sgm = g_val(r/sigma)
-    dg_sgmdr = dg_val(r/sigma)
+    # g_sgm = g_val(r/sigma)
+    # dg_sgmdr = dg_val(r/sigma)
+    g_sgm, dg_sgmdr = gpu_g_dgdr(r/sigma)
 
     # K × Γp
     @inbounds crss1 = -const4 / r3 * ( dX2*gam3 - dX3*gam2 ) 
@@ -303,7 +308,9 @@ function main(run_option; n=2^5, p=1, q=1, T=Float32, debug=false)
 
         src, trg, src2, trg2 = get_inputs(n, nfields; T=T)
         if run_option == 1
+            println("CPU")
             cpu_gravity!(src, trg)
+            println("GPU")
             # benchmark1_gpu!(src2, trg2)
             benchmark3_gpu!(src2, trg2, p, q)
             diff = abs.(trg .- trg2)
@@ -318,7 +325,7 @@ function main(run_option; n=2^5, p=1, q=1, T=Float32, debug=false)
                     display(diff[10:12])
                 end
                 n_diff = count(==(false), diff_bool)
-                n_total = 3*size(trg, 2)
+                n_total = size(trg, 1)*size(trg, 2)
                 println("$n_diff of $n_total elements DO NOT MATCH")
                 println("Error norm: $err_norm")
             end
@@ -339,8 +346,9 @@ function main(run_option; n=2^5, p=1, q=1, T=Float32, debug=false)
 end
 
 # Run_option - # [1]test [2]profile [3]benchmark
-for i in 7:17
-    main(3; n=2^i, p=256, T=Float32)
-end
+# for i in 7:17
+#     main(3; n=2^i, p=256, T=Float32)
+# end
+main(1; n=2^5, p=256, T=Float32, debug=true)
 # main(1; n=33, p=11, T=Float32)
 # main(1; n=130, p=26, q=2, T=Float64)

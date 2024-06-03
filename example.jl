@@ -1,5 +1,6 @@
 using CUDA
 using BenchmarkTools
+using SpecialFunctions
 
 # Simple vector addition
 function cpu_add1!(y, x)
@@ -169,6 +170,63 @@ function gpu_array_kernel!(v, y, x)
     return nothing
 end
 
+# Erf function
+const const2 = sqrt(2/pi)
+const sqr2 = sqrt(2)
+function cpu_g_dgdr!(g, dg, r)
+    for i in 1:length(r)
+        aux = const2*r[i]*exp(-r[i]^2/2)
+        g[i] = SpecialFunctions.erf(r[i]/sqr2)-aux
+        dg[i] = r[i]*aux
+    end
+    return nothing
+end
+
+# erf constants
+const erf_a1 =  0.254829592
+const erf_a2 = -0.284496736
+const erf_a3 =  1.421413741
+const erf_a4 = -1.453152027
+const erf_a5 =  1.061405429
+const erf_p  =  0.3275911
+@inline function my_erf(x::Float64)
+    # Abramowitz & Stegen, formula 7.1.26
+    # Max error is below 1e-7
+    xabs = abs(x)
+    t = 1.0/(1.0 + erf_p*xabs)
+    y = 1.0 - (((((erf_a5*t + erf_a4)*t) + erf_a3)*t + erf_a2)*t + erf_a1)*t*exp(-xabs*xabs)
+    return sign(x)*y
+end
+
+const erff_a1 =  0.254829592f0
+const erff_a2 = -0.284496736f0
+const erff_a3 =  1.421413741f0
+const erff_a4 = -1.453152027f0
+const erff_a5 =  1.061405429f0
+const erff_p  =  0.3275911f0
+@inline function my_erf(x::Float32)
+    # Abramowitz & Stegen, formula 7.1.26
+    # Max error is below 1e-7
+    xabs = abs(x)
+    t = 1.0f0/(1.0f0 + erff_p*xabs)
+    y = 1.0f0 - (((((erff_a5*t + erff_a4)*t) + erff_a3)*t + erff_a2)*t + erff_a1)*t*exp(-xabs*xabs)
+    return sign(x)*y
+end
+
+# Use erf function inside NVIDIA
+@inline Cuerf(x::Float64) = ccall("extern __nv_erf", llvmcall, Cdouble, (Cdouble,), x)
+@inline Cuerf(x::Float32) = ccall("extern __nv_erff", llvmcall, Cfloat, (Cfloat,), x)
+
+function gpu_g_dgdr!(g, dg, r)
+    for i in 1:length(r)
+        aux = const2*r[i]*exp(-r[i]^2/2)
+        # g[i] = Cuerf(r[i]/sqr2)-aux
+        g[i] = myerf(r[i]/sqr2)-aux
+        dg[i] = r[i]*aux
+    end
+    return nothing
+end
+
 # n = 2^12
 # nf = 43
 # T = Float32
@@ -207,15 +265,26 @@ end
 # @btime CUDA.@sync gpu_array_kernel!($v_d, $y_d, $x_d)
 # CUDA.@profile trace=true gpu_array_kernel!(v_d, y_d, x_d)
 
-m = 2^12
-n = 2^12
-k = 2^12
+# m = 2^12
+n = 2^3
+# k = 2^12
 T = Float32
+#
+# a = rand(T, m, k)
+# b = rand(T, k, n)
+# c1 = zeros(T, m, n)
+# c2 = zeros(T, m, n)
+#
+# @btime cpu_mul!(c1, a, b)
+# @btime bench_gpu_mul1!(c2, a, b)
 
-a = rand(T, m, k)
-b = rand(T, k, n)
-c1 = zeros(T, m, n)
-c2 = zeros(T, m, n)
+r = rand(T, n)
+g = zeros(T, n)
+dg = zeros(T, n)
 
-@btime cpu_mul!(c1, a, b)
-@btime bench_gpu_mul1!(c2, a, b)
+r_d = CuArray(r)
+g_d = CuArray(g)
+dg_d = CuArray(dg)
+
+cpu_g_dgdr!(g, dg, r)
+@cuda threads=length(r) gpu_g_dgdr!(g_d, dg_d, r_d)
