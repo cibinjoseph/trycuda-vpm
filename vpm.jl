@@ -350,7 +350,20 @@ function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
     return
 end
 
-function get_launch_config(ns, nt, p, q; T=Float32)
+function get_launch_config(ns, nt; T=Float32, p_max=256)
+    divs = divisors(nt)
+    p = 1
+    q = 1
+    for div in divs
+        if div <= p_max
+            p = div
+        end
+    end
+
+    if nt <= 2^13
+        # Change value of q
+    end
+    return p, q
 end
 
 # Run_option - # [1]test [2]profile [3]benchmark
