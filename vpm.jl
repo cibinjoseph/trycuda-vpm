@@ -87,7 +87,8 @@ end
     @inbounds t[23, i] += aux * gam1
 end
 
-@inline function gpu_interaction!(tx, ty, tz, s, j)
+@inline function gpu_interaction(tx, ty, tz, s, j)
+    T = eltype(s)
     @inbounds dX1 = tx - s[1, j]
     @inbounds dX2 = ty - s[2, j]
     @inbounds dX3 = tz - s[3, j]
@@ -107,44 +108,61 @@ end
     g_sgm, dg_sgmdr = gpu_g_dgdr(r/sigma)
 
     # K × Γp
-    @inbounds crss1 = -const4 / r3 * ( dX2*gam3 - dX3*gam2 ) 
-    @inbounds crss2 = -const4 / r3 * ( dX3*gam1 - dX1*gam3 )
-    @inbounds crss3 = -const4 / r3 * ( dX1*gam2 - dX2*gam1 )
+    crss1 = -const4 / r3 * ( dX2*gam3 - dX3*gam2 ) 
+    crss2 = -const4 / r3 * ( dX3*gam1 - dX1*gam3 )
+    crss3 = -const4 / r3 * ( dX1*gam2 - dX2*gam1 )
 
     # U = ∑g_σ(x-xp) * K(x-xp) × Γp
-    @inbounds u1 = g_sgm * crss1
-    @inbounds u2 = g_sgm * crss2
-    @inbounds u3 = g_sgm * crss3
+    u1 = g_sgm * crss1
+    u2 = g_sgm * crss2
+    u3 = g_sgm * crss3
 
     # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
     # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
     aux = dg_sgmdr/(sigma*r) - 3*g_sgm /r2
     # j=1
-    @inbounds j1 = aux * crss1 * dX1
-    @inbounds j2 = aux * crss2 * dX1
-    @inbounds j3 = aux * crss3 * dX1
+    j1 = aux * crss1 * dX1
+    j2 = aux * crss2 * dX1
+    j3 = aux * crss3 * dX1
     # j=2
-    @inbounds j4 = aux * crss1 * dX2
-    @inbounds j5 = aux * crss2 * dX2
-    @inbounds j6 = aux * crss3 * dX2
+    j4 = aux * crss1 * dX2
+    j5 = aux * crss2 * dX2
+    j6 = aux * crss3 * dX2
     # j=3
-    @inbounds j7 = aux * crss1 * dX3
-    @inbounds j8 = aux * crss2 * dX3
-    @inbounds j9 = aux * crss3 * dX3
+    j7 = aux * crss1 * dX3
+    j8 = aux * crss2 * dX3
+    j9 = aux * crss3 * dX3
 
     # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
     # Adds the Kronecker delta term
     aux = -const4 * g_sgm / r3
 
     # j=1
-    @inbounds j2 -= aux * gam3
-    @inbounds j3 += aux * gam2
+    j2 -= aux * gam3
+    j3 += aux * gam2
     # j=2
-    @inbounds j4 += aux * gam3
-    @inbounds j6 -= aux * gam1
+    j4 += aux * gam3
+    j6 -= aux * gam1
     # j=3
-    @inbounds j7 -= aux * gam2
-    @inbounds j8 += aux * gam1
+    j7 -= aux * gam2
+    j8 += aux * gam1
+
+    if abs(sigma) < eps(T)
+        T = typeof(u1)
+        u1 = zero(T)
+        u2 = zero(T)
+        u3 = zero(T)
+
+        j1 = zero(T)
+        j2 = zero(T)
+        j3 = zero(T)
+        j4 = zero(T)
+        j5 = zero(T)
+        j6 = zero(T)
+        j7 = zero(T)
+        j8 = zero(T)
+        j9 = zero(T)
+    end
 
     return u1, u2, u3, j1, j2, j3, j4, j5, j6, j7, j8, j9
 end
@@ -232,7 +250,8 @@ function gpu_vpm3!(s, t, num_cols)
         while i <= bodies_per_col
             isource = i + bodies_per_col*(col-1)
             if isource <= s_size
-                out = gpu_interaction!(tx, ty, tz, sh_mem, isource)
+                out = gpu_interaction(tx, ty, tz, sh_mem, isource)
+                @cushow itile, isource, out[1]
 
                 # Sum up influences for each source in a tile
                 idim = 1
@@ -346,11 +365,11 @@ function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
     else
         check_launch(n, p, q)
 
-        src, trg, src2, trg2 = get_inputs(n, nfields)
+        src, trg, src2, trg2 = get_inputs(ns, nfields)
         t_cpu = @benchmark cpu_gravity!($src, $trg)
         t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q)
         speedup = median(t_cpu.times)/median(t_gpu.times)
-        println("$n $speedup")
+        println("$ns $speedup")
     end
     return
 end
@@ -360,6 +379,6 @@ end
 #     main(3; n=2^i, p=256, T=Float32)
 # end
 # main(1; ns=2^2, p=256, T=Float32, debug=true)
-main(1; ns=4, nt=9, p=256, T=Float32, debug=true)
+main(1; ns=4, nt=9, p=3, T=Float32, debug=true)
 # main(1; n=33, p=11, T=Float32)
 # main(1; n=130, p=26, q=2, T=Float64)
