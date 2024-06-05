@@ -11,10 +11,13 @@ const nfields = 43
 # Definitions for GPU erf() function
 include("my_erf.jl")
 
-function get_inputs(n, nfields; T=Float32)
+function get_inputs(ns, nfields; nt=0, T=Float32)
     Random.seed!(1234)  # This has to be present inside this function
-    src = rand(T, nfields, n)
-    trg = rand(T, nfields, n)
+
+    nt = nt==0 ? ns : nt
+
+    src = rand(T, nfields, ns)
+    trg = rand(T, nfields, nt)
 
     src2 = deepcopy(src)
     trg2 = deepcopy(trg)
@@ -191,8 +194,8 @@ function gpu_vpm3!(s, t, num_cols)
     @inbounds ty = t[2, itarget]
     @inbounds tz = t[3, itarget]
 
-    n_tiles::Int32 = t_size/tile_dim
-    bodies_per_col::Int32 = tile_dim / num_cols
+    n_tiles::Int32 = CUDA.ceil(Int32, s_size / tile_dim)
+    bodies_per_col::Int32 = CUDA.ceil(Int32, tile_dim / num_cols)
 
     sh_mem = CuDynamicSharedArray(eltype(t), (7, tile_dim))
 
@@ -215,6 +218,11 @@ function gpu_vpm3!(s, t, num_cols)
                     @inbounds sh_mem[idim, row] = s[idim, idx]
                     idim += 1
                 end
+            else
+                while idim <= 7
+                    @inbounds sh_mem[idim, row] = zero(eltype(s))
+                    idim += 1
+                end
             end
         end
         sync_threads()
@@ -225,18 +233,18 @@ function gpu_vpm3!(s, t, num_cols)
             isource = i + bodies_per_col*(col-1)
             if isource <= s_size
                 out = gpu_interaction!(tx, ty, tz, sh_mem, isource)
-            end
 
-            # Sum up influences for each source in a tile
-            idim = 1
-            while idim <= 3
-                @inbounds U[idim] += out[idim]
-                idim += 1
-            end
-            idim = 1
-            while idim <= 9
-                @inbounds J[idim] += out[idim+3]
-                idim += 1
+                # Sum up influences for each source in a tile
+                idim = 1
+                while idim <= 3
+                    @inbounds U[idim] += out[idim]
+                    idim += 1
+                end
+                idim = 1
+                while idim <= 9
+                    @inbounds J[idim] += out[idim+3]
+                    idim += 1
+                end
             end
             i += 1
         end
@@ -277,8 +285,8 @@ function benchmark3_gpu!(s, t, p, q)
     # less than number of threads in a block (1024)
     # or limited by memory size
     threads::Int32 = p*q
-    blocks::Int32 = cld(size(s, 2), p)
-    shmem = sizeof(eltype(t)) * 7 * p  # XYZ + UVW + J = 7 variables
+    blocks::Int32 = cld(size(t, 2), p)
+    shmem = sizeof(eltype(s)) * 7 * p  # XYZ + Γ123 + σ = 7 variables
     CUDA.@sync begin
         @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm3!(s_d, t_d, q)
     end
@@ -297,20 +305,22 @@ function check_launch(n, p, q; T=Float32)
     @assert p%q == 0 "p must be divisible by q"
 end
 
-function main(run_option; n=2^5, p=1, q=1, T=Float32, debug=false)
-    p = min(p, n)
-    println("No. of particles: $n")
+function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
+    nt = nt==0 ? ns : nt
+    p = min(p, nt)
+    println("No. of sources: $ns")
+    println("No. of targets: $nt")
     println("Tile size, p: $p")
     println("Cols per tile, q: $q")
 
     if run_option == 1 || run_option == 2
-        check_launch(n, p, q; T=T)
+        check_launch(nt, p, q; T=T)
 
-        src, trg, src2, trg2 = get_inputs(n, nfields; T=T)
+        src, trg, src2, trg2 = get_inputs(ns, nfields; T=T, nt=nt)
         if run_option == 1
-            println("CPU")
+            println("CPU Run")
             cpu_gravity!(src, trg)
-            println("GPU")
+            println("GPU Run")
             # benchmark1_gpu!(src2, trg2)
             benchmark3_gpu!(src2, trg2, p, q)
             diff = abs.(trg .- trg2)
@@ -319,7 +329,7 @@ function main(run_option; n=2^5, p=1, q=1, T=Float32, debug=false)
             if all(diff_bool)
                 println("MATCHES")
             else
-                if n < 10 && debug
+                if ns < 10 && debug
                     display(trg[10:12])
                     display(trg2[10:12])
                     display(diff[10:12])
@@ -349,6 +359,7 @@ end
 # for i in 7:17
 #     main(3; n=2^i, p=256, T=Float32)
 # end
-main(1; n=2^5, p=256, T=Float32, debug=true)
+# main(1; ns=2^2, p=256, T=Float32, debug=true)
+main(1; ns=4, nt=9, p=256, T=Float32, debug=true)
 # main(1; n=33, p=11, T=Float32)
 # main(1; n=130, p=26, q=2, T=Float64)
