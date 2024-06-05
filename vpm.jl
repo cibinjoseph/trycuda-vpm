@@ -1,7 +1,6 @@
 using CUDA
 using BenchmarkTools
 using Random
-using Statistics
 using StaticArrays
 
 const eps2 = 1e-6
@@ -291,9 +290,6 @@ function benchmark3_gpu!(s, t, p, q)
     view(t, 16:24, :) .= Array(t_d[16:24, :])
 end
 
-function get_launch_config(ns, nt, p, q; T=Float32)
-end
-
 function check_launch(n, p, q; T=Float32)
     max_threads_per_block = T==Float32 ? 1024 : 256
 
@@ -354,11 +350,14 @@ function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
     return
 end
 
+function get_launch_config(ns, nt, p, q; T=Float32)
+end
+
 # Run_option - # [1]test [2]profile [3]benchmark
 # for i in 7:17
 #     main(3; n=2^i, p=256, T=Float32)
 # end
 # main(1; ns=2, p=256, T=Float32, debug=true)
-main(1; ns=8739, nt=3884, p=4, T=Float32, debug=true)
+# main(1; ns=8739, nt=3884, p=4, T=Float32, debug=true)
 # main(1; n=33, p=11, T=Float32)
 # main(1; n=130, p=26, q=2, T=Float64)
