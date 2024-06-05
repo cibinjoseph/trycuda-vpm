@@ -5,9 +5,11 @@ using SpecialFunctions
 # CPU
 const const2 = sqrt(2/pi)
 const sqr2 = sqrt(2)
-function cpu_g_dgdr(r)
-    aux = const2*r*exp(-r^2/2)
-    return SpecialFunctions.erf(r/sqr2)-aux, r*aux
+function cpu_g_dgdr(r::T) where T
+    aux::T = T(const2)*r*exp(-r^2/2)
+    g::T = SpecialFunctions.erf(r/T(sqr2))-aux
+    dg::T = r*aux
+    return g, dg
 end
 
 # GPU

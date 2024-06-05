@@ -27,11 +27,11 @@ end
 @inline g_val(r) = r^3 * (r^2 + 2.5) / (r^2 + 1)^2.5
 @inline dg_val(r) = 7.5 * r^2 / ((r^2 + 1)^2.5*(r^2 + 1))
 
-@inline function interaction!(t, s, i, j)
+@inline function interaction!(t::Array{T}, s::Array{T}, i, j) where T
     @inbounds dX1 = t[1, i] - s[1, j]
     @inbounds dX2 = t[2, i] - s[2, j]
     @inbounds dX3 = t[3, i] - s[3, j]
-    r2 = dX1*dX1 + dX2*dX2 + dX3*dX3 + eps2
+    r2 = dX1*dX1 + dX2*dX2 + dX3*dX3 + T(eps2)
     r = sqrt(r2)
     r3 = r*r2
 
@@ -59,32 +59,21 @@ end
     # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
     # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
     aux = dg_sgmdr/(sigma*r) - 3*g_sgm /r2
-    # j=1
-    @inbounds t[16, i] += aux * crss1 * dX1
-    @inbounds t[17, i] += aux * crss2 * dX1
-    @inbounds t[18, i] += aux * crss3 * dX1
-    # j=2
-    @inbounds t[19, i] += aux * crss1 * dX2
-    @inbounds t[20, i] += aux * crss2 * dX2
-    @inbounds t[21, i] += aux * crss3 * dX2
-    # j=3
-    @inbounds t[22, i] += aux * crss1 * dX3
-    @inbounds t[23, i] += aux * crss2 * dX3
-    @inbounds t[24, i] += aux * crss3 * dX3
-
     # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
     # Adds the Kronecker delta term
-    aux = -const4 * g_sgm / r3
-
+    aux2 = -const4 * g_sgm / r3
     # j=1
-    @inbounds t[17, i] -= aux * gam3
-    @inbounds t[18, i] += aux * gam2
+    @inbounds t[16, i] += aux * crss1 * dX1
+    @inbounds t[17, i] += aux * crss2 * dX1 - aux2 * gam3
+    @inbounds t[18, i] += aux * crss3 * dX1 + aux2 * gam2
     # j=2
-    @inbounds t[19, i] += aux * gam3
-    @inbounds t[21, i] -= aux * gam1
+    @inbounds t[19, i] += aux * crss1 * dX2 + aux2 * gam3
+    @inbounds t[20, i] += aux * crss2 * dX2
+    @inbounds t[21, i] += aux * crss3 * dX2 - aux2 * gam1
     # j=3
-    @inbounds t[22, i] -= aux * gam2
-    @inbounds t[23, i] += aux * gam1
+    @inbounds t[22, i] += aux * crss1 * dX3 - aux2 * gam2
+    @inbounds t[23, i] += aux * crss2 * dX3 + aux2 * gam1
+    @inbounds t[24, i] += aux * crss3 * dX3
 end
 
 @inline function gpu_interaction(tx, ty, tz, s, j)
@@ -156,7 +145,7 @@ end
     return u1, u2, u3, j1, j2, j3, j4, j5, j6, j7, j8, j9
 end
 
-function cpu_gravity!(s, t)
+function cpu_vpm!(s, t)
     for i in 1:size(t, 2)
         for j in 1:size(s, 2)
             interaction!(t, s, i, j)
@@ -326,7 +315,7 @@ function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
         src, trg, src2, trg2 = get_inputs(ns, nfields; T=T, nt=nt)
         if run_option == 1
             println("CPU Run")
-            cpu_gravity!(src, trg)
+            cpu_vpm!(src, trg)
             println("GPU Run")
             # benchmark1_gpu!(src2, trg2)
             benchmark3_gpu!(src2, trg2, p, q)
@@ -354,7 +343,7 @@ function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
         check_launch(n, p, q)
 
         src, trg, src2, trg2 = get_inputs(ns, nfields)
-        t_cpu = @benchmark cpu_gravity!($src, $trg)
+        t_cpu = @benchmark cpu_vpm!($src, $trg)
         t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q)
         speedup = median(t_cpu.times)/median(t_gpu.times)
         println("$ns $speedup")
@@ -366,7 +355,7 @@ end
 # for i in 7:17
 #     main(3; n=2^i, p=256, T=Float32)
 # end
-# main(1; ns=2^2, p=256, T=Float32, debug=true)
-main(1; ns=4, nt=9, p=3, T=Float32, debug=true)
+main(1; ns=2, p=256, T=Float32, debug=true)
+# main(1; ns=1, nt=6, p=3, T=Float32, debug=true)
 # main(1; n=33, p=11, T=Float32)
 # main(1; n=130, p=26, q=2, T=Float64)
