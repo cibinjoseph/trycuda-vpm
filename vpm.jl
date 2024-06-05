@@ -120,32 +120,21 @@ end
     # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
     # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
     aux = dg_sgmdr/(sigma*r) - 3*g_sgm /r2
-    # j=1
-    j1 = aux * crss1 * dX1
-    j2 = aux * crss2 * dX1
-    j3 = aux * crss3 * dX1
-    # j=2
-    j4 = aux * crss1 * dX2
-    j5 = aux * crss2 * dX2
-    j6 = aux * crss3 * dX2
-    # j=3
-    j7 = aux * crss1 * dX3
-    j8 = aux * crss2 * dX3
-    j9 = aux * crss3 * dX3
-
     # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
     # Adds the Kronecker delta term
-    aux = -const4 * g_sgm / r3
-
+    aux2 = -const4 * g_sgm / r3
     # j=1
-    j2 -= aux * gam3
-    j3 += aux * gam2
+    j1 = aux * crss1 * dX1
+    j2 = aux * crss2 * dX1 - aux2 * gam3
+    j3 = aux * crss3 * dX1 + aux2 * gam2
     # j=2
-    j4 += aux * gam3
-    j6 -= aux * gam1
+    j4 = aux * crss1 * dX2 + aux2 * gam3
+    j5 = aux * crss2 * dX2
+    j6 = aux * crss3 * dX2 - aux2 * gam1
     # j=3
-    j7 -= aux * gam2
-    j8 += aux * gam1
+    j7 = aux * crss1 * dX3 - aux2 * gam2
+    j8 = aux * crss2 * dX3 + aux2 * gam1
+    j9 = aux * crss3 * dX3
 
     if abs(sigma) < eps(T)
         T = typeof(u1)
@@ -251,7 +240,6 @@ function gpu_vpm3!(s, t, num_cols)
             isource = i + bodies_per_col*(col-1)
             if isource <= s_size
                 out = gpu_interaction(tx, ty, tz, sh_mem, isource)
-                @cushow itile, isource, out[1]
 
                 # Sum up influences for each source in a tile
                 idim = 1
