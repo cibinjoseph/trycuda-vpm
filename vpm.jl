@@ -90,8 +90,7 @@ end
     @inbounds gam3 = s[6, j]
     @inbounds sigma = s[7, j]
 
-    const zerotol = 100.0f0 * eps(T)
-    if r2 > zerotol || abs(sigma) > zerotol
+    if r2 > 100.0f0 * eps(T)
         # Regularizing function and deriv
         # g_sgm = g_val(r/sigma)
         # dg_sgmdr = dg_val(r/sigma)
