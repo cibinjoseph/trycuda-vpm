@@ -80,7 +80,7 @@ end
     @inbounds dX1 = tx - s[1, j]
     @inbounds dX2 = ty - s[2, j]
     @inbounds dX3 = tz - s[3, j]
-    r2 = dX1*dX1 + dX2*dX2 + dX3*dX3 + eps2
+    r2 = dX1*dX1 + dX2*dX2 + dX3*dX3
     r = sqrt(r2)
     r3 = r*r2
 
@@ -90,41 +90,43 @@ end
     @inbounds gam3 = s[6, j]
     @inbounds sigma = s[7, j]
 
-    # Regularizing function and deriv
-    # g_sgm = g_val(r/sigma)
-    # dg_sgmdr = dg_val(r/sigma)
-    g_sgm, dg_sgmdr = gpu_g_dgdr(r/sigma)
+    const zerotol = 100.0f0 * eps(T)
+    if r2 > zerotol || abs(sigma) > zerotol
+        # Regularizing function and deriv
+        # g_sgm = g_val(r/sigma)
+        # dg_sgmdr = dg_val(r/sigma)
+        g_sgm, dg_sgmdr = gpu_g_dgdr(r/sigma)
 
-    # K × Γp
-    crss1 = -const4 / r3 * ( dX2*gam3 - dX3*gam2 ) 
-    crss2 = -const4 / r3 * ( dX3*gam1 - dX1*gam3 )
-    crss3 = -const4 / r3 * ( dX1*gam2 - dX2*gam1 )
+        # K × Γp
+        crss1 = -const4 / r3 * ( dX2*gam3 - dX3*gam2 ) 
+        crss2 = -const4 / r3 * ( dX3*gam1 - dX1*gam3 )
+        crss3 = -const4 / r3 * ( dX1*gam2 - dX2*gam1 )
 
-    # U = ∑g_σ(x-xp) * K(x-xp) × Γp
-    u1 = g_sgm * crss1
-    u2 = g_sgm * crss2
-    u3 = g_sgm * crss3
+        # U = ∑g_σ(x-xp) * K(x-xp) × Γp
+        u1 = g_sgm * crss1
+        u2 = g_sgm * crss2
+        u3 = g_sgm * crss3
 
-    # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
-    # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
-    aux = dg_sgmdr/(sigma*r) - 3*g_sgm /r2
-    # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
-    # Adds the Kronecker delta term
-    aux2 = -const4 * g_sgm / r3
-    # j=1
-    j1 = aux * crss1 * dX1
-    j2 = aux * crss2 * dX1 - aux2 * gam3
-    j3 = aux * crss3 * dX1 + aux2 * gam2
-    # j=2
-    j4 = aux * crss1 * dX2 + aux2 * gam3
-    j5 = aux * crss2 * dX2
-    j6 = aux * crss3 * dX2 - aux2 * gam1
-    # j=3
-    j7 = aux * crss1 * dX3 - aux2 * gam2
-    j8 = aux * crss2 * dX3 + aux2 * gam1
-    j9 = aux * crss3 * dX3
+        # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
+        # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
+        aux = dg_sgmdr/(sigma*r) - 3*g_sgm /r2
+        # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
+        # Adds the Kronecker delta term
+        aux2 = -const4 * g_sgm / r3
+        # j=1
+        j1 = aux * crss1 * dX1
+        j2 = aux * crss2 * dX1 - aux2 * gam3
+        j3 = aux * crss3 * dX1 + aux2 * gam2
+        # j=2
+        j4 = aux * crss1 * dX2 + aux2 * gam3
+        j5 = aux * crss2 * dX2
+        j6 = aux * crss3 * dX2 - aux2 * gam1
+        # j=3
+        j7 = aux * crss1 * dX3 - aux2 * gam2
+        j8 = aux * crss2 * dX3 + aux2 * gam1
+        j9 = aux * crss3 * dX3
 
-    if abs(sigma) < eps(T)
+    else
         T = typeof(u1)
         u1 = zero(T)
         u2 = zero(T)
