@@ -2,6 +2,7 @@ using CUDA
 using BenchmarkTools
 using Random
 using StaticArrays
+# using Cthulhu
 
 const eps2 = 1e-6
 const const4 = 0.25/pi
@@ -30,49 +31,51 @@ end
     @inbounds dX1 = t[1, i] - s[1, j]
     @inbounds dX2 = t[2, i] - s[2, j]
     @inbounds dX3 = t[3, i] - s[3, j]
-    r2 = dX1*dX1 + dX2*dX2 + dX3*dX3 + T(eps2)
+    r2 = dX1*dX1 + dX2*dX2 + dX3*dX3# + T(eps2)
     r = sqrt(r2)
     r3 = r*r2
 
-    # Mapping to variables
-    @inbounds gam1 = s[4, j]
-    @inbounds gam2 = s[5, j]
-    @inbounds gam3 = s[6, j]
-    @inbounds sigma = s[7, j]
+    if r2 > T(100*eps(T))
+        # Mapping to variables
+        @inbounds gam1 = s[4, j]
+        @inbounds gam2 = s[5, j]
+        @inbounds gam3 = s[6, j]
+        @inbounds sigma = s[7, j]
 
-    # Regularizing function and deriv
-    # g_sgm = g_val(r/sigma)
-    # dg_sgmdr = dg_val(r/sigma)
-    g_sgm, dg_sgmdr = cpu_g_dgdr(r/sigma)
+        # Regularizing function and deriv
+        # g_sgm = g_val(r/sigma)
+        # dg_sgmdr = dg_val(r/sigma)
+        g_sgm, dg_sgmdr = cpu_g_dgdr(r/sigma)
 
-    # K × Γp
-    @inbounds crss1 = -const4 / r3 * ( dX2*gam3 - dX3*gam2 ) 
-    @inbounds crss2 = -const4 / r3 * ( dX3*gam1 - dX1*gam3 )
-    @inbounds crss3 = -const4 / r3 * ( dX1*gam2 - dX2*gam1 )
+        # K × Γp
+        @inbounds crss1 = -const4 / r3 * ( dX2*gam3 - dX3*gam2 ) 
+        @inbounds crss2 = -const4 / r3 * ( dX3*gam1 - dX1*gam3 )
+        @inbounds crss3 = -const4 / r3 * ( dX1*gam2 - dX2*gam1 )
 
-    # U = ∑g_σ(x-xp) * K(x-xp) × Γp
-    @inbounds t[10, i] += g_sgm * crss1
-    @inbounds t[11, i] += g_sgm * crss2
-    @inbounds t[12, i] += g_sgm * crss3
+        # U = ∑g_σ(x-xp) * K(x-xp) × Γp
+        @inbounds t[10, i] += g_sgm * crss1
+        @inbounds t[11, i] += g_sgm * crss2
+        @inbounds t[12, i] += g_sgm * crss3
 
-    # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
-    # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
-    aux = dg_sgmdr/(sigma*r) - 3*g_sgm /r2
-    # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
-    # Adds the Kronecker delta term
-    aux2 = -const4 * g_sgm / r3
-    # j=1
-    @inbounds t[16, i] += aux * crss1 * dX1
-    @inbounds t[17, i] += aux * crss2 * dX1 - aux2 * gam3
-    @inbounds t[18, i] += aux * crss3 * dX1 + aux2 * gam2
-    # j=2
-    @inbounds t[19, i] += aux * crss1 * dX2 + aux2 * gam3
-    @inbounds t[20, i] += aux * crss2 * dX2
-    @inbounds t[21, i] += aux * crss3 * dX2 - aux2 * gam1
-    # j=3
-    @inbounds t[22, i] += aux * crss1 * dX3 - aux2 * gam2
-    @inbounds t[23, i] += aux * crss2 * dX3 + aux2 * gam1
-    @inbounds t[24, i] += aux * crss3 * dX3
+        # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
+        # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
+        aux = dg_sgmdr/(sigma*r) - 3*g_sgm /r2
+        # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
+        # Adds the Kronecker delta term
+        aux2 = -const4 * g_sgm / r3
+        # j=1
+        @inbounds t[16, i] += aux * crss1 * dX1
+        @inbounds t[17, i] += aux * crss2 * dX1 - aux2 * gam3
+        @inbounds t[18, i] += aux * crss3 * dX1 + aux2 * gam2
+        # j=2
+        @inbounds t[19, i] += aux * crss1 * dX2 + aux2 * gam3
+        @inbounds t[20, i] += aux * crss2 * dX2
+        @inbounds t[21, i] += aux * crss3 * dX2 - aux2 * gam1
+        # j=3
+        @inbounds t[22, i] += aux * crss1 * dX3 - aux2 * gam2
+        @inbounds t[23, i] += aux * crss2 * dX3 + aux2 * gam1
+        @inbounds t[24, i] += aux * crss3 * dX3
+    end
 end
 
 @inline function gpu_interaction(tx, ty, tz, s, j)
@@ -80,7 +83,7 @@ end
     @inbounds dX1 = tx - s[1, j]
     @inbounds dX2 = ty - s[2, j]
     @inbounds dX3 = tz - s[3, j]
-    r2 = dX1*dX1 + dX2*dX2 + dX3*dX3
+    r2 = dX1*dX1 + dX2*dX2 + dX3*dX3 + eps2
     r = sqrt(r2)
     r3 = r*r2
 
@@ -90,7 +93,21 @@ end
     @inbounds gam3 = s[6, j]
     @inbounds sigma = s[7, j]
 
-    if r2 > 100.0f0 * eps(T)
+    u1 = zero(T)
+    u2 = zero(T)
+    u3 = zero(T)
+
+    j1 = zero(T)
+    j2 = zero(T)
+    j3 = zero(T)
+    j4 = zero(T)
+    j5 = zero(T)
+    j6 = zero(T)
+    j7 = zero(T)
+    j8 = zero(T)
+    j9 = zero(T)
+
+    # if r2 > eps(T) || abs(sigma) > eps(T)
         # Regularizing function and deriv
         # g_sgm = g_val(r/sigma)
         # dg_sgmdr = dg_val(r/sigma)
@@ -124,24 +141,8 @@ end
         j7 = aux * crss1 * dX3 - aux2 * gam2
         j8 = aux * crss2 * dX3 + aux2 * gam1
         j9 = aux * crss3 * dX3
-
-    else
-        T = typeof(u1)
-        u1 = zero(T)
-        u2 = zero(T)
-        u3 = zero(T)
-
-        j1 = zero(T)
-        j2 = zero(T)
-        j3 = zero(T)
-        j4 = zero(T)
-        j5 = zero(T)
-        j6 = zero(T)
-        j7 = zero(T)
-        j8 = zero(T)
-        j9 = zero(T)
-    end
-
+    # end
+    #
     return u1, u2, u3, j1, j2, j3, j4, j5, j6, j7, j8, j9
 end
 
@@ -151,11 +152,11 @@ function cpu_vpm!(s, t)
             interaction!(t, s, i, j)
         end
     end
-end
+    end
 
-# Naive implementation
-# Each thread handles a single target and uses global GPU memory
-function gpu_vpm1!(s, t)
+    # Naive implementation
+    # Each thread handles a single target and uses global GPU memory
+    function gpu_vpm1!(s, t)
     idx::Int32 = threadIdx().x+(blockIdx().x-1)*blockDim().x
 
     t_size::Int32 = size(t, 2)
@@ -371,7 +372,7 @@ end
 # for i in 7:17
 #     main(3; n=2^i, p=256, T=Float32)
 # end
-# main(1; ns=2, p=256, T=Float32, debug=true)
+main(1; ns=2, p=256, T=Float32, debug=true)
 # main(1; ns=8739, nt=3884, p=4, T=Float32, debug=true)
-# main(1; n=33, p=11, T=Float32)
+# main(1; ns=33, p=11, T=Float32)
 # main(1; n=130, p=26, q=2, T=Float64)
