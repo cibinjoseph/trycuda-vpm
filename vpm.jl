@@ -279,14 +279,18 @@ function benchmark3_gpu!(s, t, p, q)
     view(t, 16:24, :) .= Array(t_d[16:24, :])
 end
 
-function check_launch(n, p, q; T=Float32)
+function check_launch(n, p, q; T=Float32, throw_error=true)
     max_threads_per_block = T==Float32 ? 1024 : 256
 
-    @assert p <= n "p must be less than or equal to n"
-    @assert p*q < max_threads_per_block "p*q must be less than $max_threads_per_block"
-    @assert q <= p "q must be less than or equal to p"
-    @assert n%p == 0 "n must be divisible by p"
-    @assert p%q == 0 "p must be divisible by q"
+    isgood = true
+
+    if p > n; isgood = false; throw_error && error("p must be less than or equal to n"); end
+    if p*q >= max_threads_per_block; isgood = false; throw_error && error("p*q must be less than $max_threads_per_block"); end
+    if q > p; isgood = false; throw_error && error("q must be less than or equal to p"); end
+    if n % p != 0; isgood = false; throw_error && error("n must be divisible by p"); end
+    if p % q != 0; isgood = false; throw_error && error("p must be divisible by q"); end
+
+    return isgood
 end
 
 function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
@@ -343,17 +347,36 @@ function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
 end
 
 function get_launch_config(ns, nt; T=Float32, p_max=256)
-    divs = divisors(nt)
+    divs_n = divisors(nt)
     p = 1
     q = 1
-    for div in divs
+    ip = 1
+    for (i, div) in enumerate(divs_n)
         if div <= p_max
             p = div
+            ip = i
         end
     end
 
+    i_weight = 0.25
+    j_weight = 1-i_weight
+
+    max_ij = i_weight*ip + j_weight*1
     if nt <= 2^13
-        # Change value of q
+        divs_p = divs_n
+        for i in 1:length(divs_n)
+            for j in 1:length(divs_p)
+                isgood = check_launch(nt, divs_n[i], divs_p[j]; T=T, throw_error=false)
+                if isgood && (divs_n[i] <= p_max)
+                    # Check if this is the max achievable ij value
+                    # in the p, q choice matrix
+                    if i_weight*i+j_weight*j >= max_ij
+                        p = divs_n[i]
+                        q = divs_p[j]
+                    end
+                end
+            end
+        end
     end
     return p, q
 end
@@ -363,6 +386,6 @@ end
 #     main(3; n=2^i, p=256, T=Float32)
 # end
 # main(1; ns=2, p=256, T=Float32, debug=true)
-main(1; ns=8739, nt=3884, p=1, T=Float64, debug=true)
+# main(1; ns=8739, nt=3884, p=1, T=Float64, debug=true)
 # main(1; ns=33, p=11, T=Float64)
 # main(1; n=130, p=26, q=2, T=Float64)
