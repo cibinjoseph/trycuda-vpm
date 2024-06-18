@@ -2,6 +2,7 @@ using CUDA
 using BenchmarkTools
 using Random
 using StaticArrays
+using Primes
 
 const eps2 = 1e-6
 const const4 = 0.25/pi
@@ -346,7 +347,7 @@ function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
     return
 end
 
-function get_launch_config(ns, nt; T=Float32, p_max=256)
+function get_launch_config(nt; T=Float32, p_max=256)
     divs_n = divisors(nt)
     p = 1
     q = 1
@@ -358,19 +359,24 @@ function get_launch_config(ns, nt; T=Float32, p_max=256)
         end
     end
 
-    i_weight = 0.25
+    # Decision algorithm 1: Creates a matrix using indices and finds max of 
+    # weighted sum of indices
+
+    i_weight = 0
     j_weight = 1-i_weight
 
     max_ij = i_weight*ip + j_weight*1
     if nt <= 2^13
         divs_p = divs_n
         for i in 1:length(divs_n)
-            for j in 1:length(divs_p)
+            for j in 1:length(divs_n)
                 isgood = check_launch(nt, divs_n[i], divs_p[j]; T=T, throw_error=false)
                 if isgood && (divs_n[i] <= p_max)
                     # Check if this is the max achievable ij value
                     # in the p, q choice matrix
-                    if i_weight*i+j_weight*j >= max_ij
+                    obj_val = i_weight*i+j_weight*j
+                    if obj_val >= max_ij
+                        max_ij = obj_val
                         p = divs_n[i]
                         q = divs_p[j]
                     end
@@ -378,6 +384,7 @@ function get_launch_config(ns, nt; T=Float32, p_max=256)
             end
         end
     end
+
     return p, q
 end
 
