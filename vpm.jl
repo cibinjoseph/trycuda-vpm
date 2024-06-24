@@ -247,6 +247,32 @@ function gpu_vpm3!(s, t, num_cols)
     return
 end
 
+# Each target has a seperate block. Each source interaction computed using a single thread
+function gpu_vpm4!(s, t)
+    isource::Int32 = threadIdx().x
+    itarget::Int32 = blockIdx().x
+
+    @inbounds tx = t[1, itarget]
+    @inbounds ty = t[2, itarget]
+    @inbounds tz = t[3, itarget]
+
+    # Variable initialization
+    U = @MVector zeros(eltype(t), 3)
+    J = @MVector zeros(eltype(t), 9)
+
+    out = gpu_interaction(tx, ty, tz, s, isource)
+
+    # Sum up accelerations for each target/thread
+    idx::Int32 = 0
+    for idx = 1:3
+        @inbounds CUDA.@atomic t[9+idx, itarget] += out[idx]
+    end
+    for idx = 1:9
+        @inbounds CUDA.@atomic t[15+idx, itarget] += out[idx+3]
+    end
+    return
+end
+
 function benchmark1_gpu!(s, t)
     s_d = CuArray(view(s, 1:7, :))
     t_d = CuArray(t)
@@ -274,6 +300,21 @@ function benchmark3_gpu!(s, t, p, q)
     shmem = sizeof(eltype(s)) * 7 * p  # XYZ + Γ123 + σ = 7 variables
     CUDA.@sync begin
         @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm3!(s_d, t_d, q)
+    end
+
+    view(t, 10:12, :) .= Array(t_d[10:12, :])
+    view(t, 16:24, :) .= Array(t_d[16:24, :])
+end
+
+function benchmark4_gpu!(s, t)
+    s_d = CuArray(view(s, 1:7, :))
+    t_d = CuArray(t)
+
+    threads::Int32 = size(s, 2)
+    blocks::Int32 = size(t, 2)
+
+    CUDA.@sync begin
+        @cuda threads=threads blocks=blocks gpu_vpm4!(s_d, t_d)
     end
 
     view(t, 10:12, :) .= Array(t_d[10:12, :])
@@ -311,7 +352,8 @@ function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
             cpu_vpm!(src, trg)
             println("GPU Run")
             # benchmark1_gpu!(src2, trg2)
-            benchmark3_gpu!(src2, trg2, p, q)
+            # benchmark3_gpu!(src2, trg2, p, q)
+            benchmark4_gpu!(src2, trg2)
             diff = abs.(trg .- trg2)
             err_norm = sqrt(sum(abs2, diff)/length(diff))
             diff_bool = diff .< eps(T)
@@ -333,14 +375,16 @@ function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
             end
         else
             println("Running profiler...")
-            CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q)
+            # CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q)
+            CUDA.@profile external=true benchmark4_gpu!(src2, trg2, p, q)
         end
     else
-        check_launch(n, p, q)
+        check_launch(nt, p, q)
 
         src, trg, src2, trg2 = get_inputs(ns, nfields)
         t_cpu = @benchmark cpu_vpm!($src, $trg)
-        t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q)
+        # t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q)
+        t_gpu = @benchmark benchmark4_gpu!($src2, $trg2)
         speedup = median(t_cpu.times)/median(t_gpu.times)
         println("$ns $speedup")
     end
@@ -393,6 +437,7 @@ end
 #     main(3; n=2^i, p=256, T=Float32)
 # end
 # main(1; ns=2, p=256, T=Float32, debug=true)
+main(3; ns=2^9, nt=2^12, T=Float32, debug=true)
 # main(1; ns=8739, nt=3884, p=1, T=Float64, debug=true)
 # main(1; ns=33, p=11, T=Float64)
 # main(1; n=130, p=26, q=2, T=Float64)
