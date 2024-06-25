@@ -78,7 +78,7 @@ end
     end
 end
 
-@inline function gpu_interaction(tx, ty, tz, s, j)
+@inline function gpu_interaction(tx, ty, tz, s, j, kernel)
     T = eltype(s)
     @inbounds dX1 = tx - s[1, j]
     @inbounds dX2 = ty - s[2, j]
@@ -99,7 +99,7 @@ end
         # Regularizing function and deriv
         # g_sgm = g_val(r/sigma)
         # dg_sgmdr = dg_val(r/sigma)
-        g_sgm, dg_sgmdr = gpu_g_dgdr(r/sigma)
+        g_sgm, dg_sgmdr = kernel(r/sigma)
 
         # K × Γp
         crss1 = -T(const4) / r3 * ( dX2*gam3 - dX3*gam2 )
@@ -163,7 +163,7 @@ end
 
 # Each thread handles a single target and uses local GPU memory
 # Sources divided into multiple columns and influence is computed by multiple threads
-function gpu_vpm3!(s, t, num_cols)
+function gpu_vpm3!(s, t, num_cols, kernel)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
 
@@ -217,7 +217,7 @@ function gpu_vpm3!(s, t, num_cols)
         while i <= bodies_per_col
             isource = i + bodies_per_col*(col-1)
             if isource <= s_size
-                out = gpu_interaction(tx, ty, tz, sh_mem, isource)
+                out = gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
 
                 # Sum up influences for each source in a tile
                 idim = 1
@@ -291,6 +291,7 @@ end
 function benchmark3_gpu!(s, t, p, q)
     s_d = CuArray(view(s, 1:7, :))
     t_d = CuArray(t)
+    kernel = gpu_g_dgdr
 
     # Num of threads in a tile should always be 
     # less than number of threads in a block (1024)
@@ -299,7 +300,7 @@ function benchmark3_gpu!(s, t, p, q)
     blocks::Int32 = cld(size(t, 2), p)
     shmem = sizeof(eltype(s)) * 7 * p  # XYZ + Γ123 + σ = 7 variables
     CUDA.@sync begin
-        @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm3!(s_d, t_d, q)
+        @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm3!(s_d, t_d, q, kernel)
     end
 
     view(t, 10:12, :) .= Array(t_d[10:12, :])
@@ -436,8 +437,8 @@ end
 # for i in 7:17
 #     main(3; n=2^i, p=256, T=Float32)
 # end
-# main(1; ns=2, p=256, T=Float32, debug=true)
-main(3; ns=2^9, nt=2^12, T=Float32, debug=true)
+main(1; ns=2, p=256, T=Float32, debug=true)
+# main(3; ns=2^9, nt=2^12, T=Float32, debug=true)
 # main(1; ns=8739, nt=3884, p=1, T=Float64, debug=true)
 # main(1; ns=33, p=11, T=Float64)
 # main(1; n=130, p=26, q=2, T=Float64)
