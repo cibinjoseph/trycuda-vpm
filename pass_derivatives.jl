@@ -1,15 +1,18 @@
 using FiniteDiff
 using ForwardDiff
 
-include("gravitation.jl")
+include("vpm.jl")
 
 tol = 1f-4  # Difference b/w finite diff and forward diff
 
 function get_net_interaction_cpu(x::Vector{T}) where T
     radius = x[1]
-    gamma = x[2]
+    gammaX = x[2]
+    gammaY = x[3]
+    gammaZ = x[4]
+    sigma  = x[5]
 
-    nparticles, nfields = 10, 7
+    nparticles, nfields = 10, 43
 
     theta = LinRange{Float32}(0, 2*pi, nparticles+1)[1:end-1]
 
@@ -19,10 +22,13 @@ function get_net_interaction_cpu(x::Vector{T}) where T
     for i in 1:nparticles
         src[1, i] = radius * cos(theta[i])
         src[2, i] = radius * sin(theta[i])
-        src[4, i] = gamma
+        src[4, i] = gammaX
+        src[5, i] = gammaY
+        src[6, i] = gammaZ
+        src[7, i] = sigma
     end
 
-    cpu_gravity!(src, src)
+    cpu_vpm!(src, src)
 
     vel = zero(T)
     for j in 1:nparticles
@@ -56,21 +62,25 @@ end
 function gpu_runner!(y::Vector{T}, x::Vector{T}) where T
     x_d = CuArray(view(x, :, :))
     y_d = similar(x_d)
+    kernel = gpu_g_dgdr
     n = length(x)
-    nthreads = min(n, 2^5)
-    nblocks = ceil(Int32, n/nthreads)
-    CUDA.@sync @cuda threads=nthreads blocks=nblocks gpu_func!(y_d, x_d)
-    y .= Array(y_d)
+    p, q = get_launch_config(n; T=T)
+    nthreads::Int32 = p*q
+    nblocks::Int32 = cld(n, p)
+    CUDA.@sync @cuda threads=nthreads blocks=nblocks gpu_vpm3!(y_d, x_d, q, kernel)
+    y[10:12] .= Array(y_d[10:12, :])
+    y[16:24] .= Array(y_d[16:24, :])
     return
 end
 
 # CPU gravitation kernel
-r = 5.0f0
-gamma = 2.0f0
-# @show get_net_interaction_cpu([r, gamma])
-@show df_ad = ForwardDiff.gradient(get_net_interaction_cpu, [r, gamma])
-@show df_fd = FiniteDiff.finite_difference_gradient(get_net_interaction_cpu, [r, gamma])
-@assert isapprox(df_ad, df_fd; atol=tol)
+T = Float64
+x = rand(T, 5)
+x_gpu = deepcopy(x)
+@show get_net_interaction_cpu(x)
+@show df_ad = ForwardDiff.gradient(get_net_interaction_cpu, x)
+# @show df_fd = FiniteDiff.finite_difference_gradient(get_net_interaction_cpu, x)
+# @assert isapprox(df_ad, df_fd; atol=tol)
 
 # GPU kernel - simple
 # n = 2^2
@@ -83,10 +93,12 @@ gamma = 2.0f0
 # GPU gravitation kernel
 function get_net_interaction_gpu(x::Vector{T}) where T
     radius = x[1]
-    gamma = x[2]
+    gammaX = x[2]
+    gammaY = x[3]
+    gammaZ = x[4]
+    sigma  = x[5]
 
-    nparticles, nfields = 10, 7
-    p = min(2^5, nparticles, 2^10)
+    nparticles, nfields = 10, 43
 
     theta = LinRange(0, 2*pi, nparticles+1)[1:end-1]
 
@@ -96,17 +108,23 @@ function get_net_interaction_gpu(x::Vector{T}) where T
     for i in 1:nparticles
         src[1, i] = radius * cos(theta[i])
         src[2, i] = radius * sin(theta[i])
-        src[4, i] = gamma
+        src[4, i] = gammaX
+        src[5, i] = gammaY
+        src[6, i] = gammaZ
+        src[7, i] = sigma
     end
 
-    s_d = CuArray(src)
+    s_d = CuArray(view(src, 1:24, :))
 
-    threads = p
-    blocks = cld(size(src, 2), p)
-    shmem = sizeof(Float32) * 4 * p
 
-    @cuda threads=threads blocks=blocks shmem=shmem gpu_gravity2!(s_d, s_d)
-    view(src, 5:7, :) .= Array(s_d[5:7, :])
+    kernel = gpu_g_dgdr
+    p, q = get_launch_config(nparticles; T=T)
+    nthreads::Int32 = p*q
+    nblocks::Int32 = cld(nparticles, p)
+    shmem = sizeof(T) * 7 * p
+    CUDA.@sync @cuda threads=nthreads blocks=nblocks shmem=shmem gpu_vpm3!(s_d, s_d, q, kernel)
+    view(src, 10:12, :) .= Array(s_d[10:12, :])
+    view(src, 16:24, :) .= Array(s_d[16:24, :])
 
     vel = zero(T)
     for j in 1:nparticles
@@ -118,7 +136,7 @@ function get_net_interaction_gpu(x::Vector{T}) where T
     return vel
 end
 
-# @show get_net_interaction_gpu([r, gamma])
-@show df_ad = ForwardDiff.gradient(get_net_interaction_cpu, [r, gamma])
-@show df_fd = FiniteDiff.finite_difference_gradient(get_net_interaction_cpu, [r, gamma])
-@assert isapprox(df_ad, df_fd; atol=tol)
+@show get_net_interaction_gpu(x_gpu)
+@show df_ad = ForwardDiff.gradient(get_net_interaction_gpu, x_gpu)
+# @show df_fd = FiniteDiff.finite_difference_gradient(get_net_interaction_gpu, x_gpu)
+# @assert isapprox(df_ad, df_fd; atol=tol)
