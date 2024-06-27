@@ -437,7 +437,7 @@ end
 # for i in 7:17
 #     main(3; n=2^i, p=256, T=Float32)
 # end
-main(1; ns=2, p=256, T=Float32, debug=true)
+# main(1; ns=2, p=256, T=Float32, debug=true)
 # main(3; ns=2^9, nt=2^12, T=Float32, debug=true)
 # main(1; ns=8739, nt=3884, p=1, T=Float64, debug=true)
 # main(1; ns=33, p=11, T=Float64)
