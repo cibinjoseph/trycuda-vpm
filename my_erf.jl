@@ -124,7 +124,8 @@ const sb5 = 2.55305040643316442583e+03
 const sb6 = 4.74528541206955367215e+02
 const sb7 = -2.24409524465858183362e+01
 
-function my_erf(x::Float32)
+# Single precision version
+function my_erf32(x)
     xabs = abs(x)
     sgn = sign(x)
     oneval = one(x)
@@ -158,7 +159,8 @@ function my_erf(x::Float32)
     return val
 end
 
-function my_erf(x::Float64)
+# Double precision version
+function my_erf64(x)
     xabs = abs(x)
     sgn = sign(x)
     oneval = one(x)
@@ -191,6 +193,14 @@ function my_erf(x::Float64)
 
     return val
 end
+
+my_erf(x::Float64) = my_erf64(x)
+my_erf(x::Float32) = my_erf32(x)
+
+# ForwardDiff compatibility
+my_erf(x::ForwardDiff.Dual{<:Any, Float64, <:Any}) = my_erf64(x)
+my_erf(x::ForwardDiff.Dual{<:Any, Float32, <:Any}) = my_erf32(x)
+
 # CPU
 const const2 = sqrt(2/pi)
 const sqr2 = sqrt(2)
