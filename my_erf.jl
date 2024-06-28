@@ -266,3 +266,6 @@ end
 #
 # cpu_g_dgdr!(g, dg, r)
 # @cuda threads=length(r) gpu_g_dgdr!(g_d, dg_d, r_d)
+
+# Definitions for ForwardDiff compatibility with @atomic
+# Ref. https://discourse.julialang.org/t/cuda-atomic-add-for-forwarddiff-duals/85968
