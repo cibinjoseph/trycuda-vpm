@@ -163,6 +163,7 @@ end
 
 # Each thread handles a single target and uses local GPU memory
 # Sources divided into multiple columns and influence is computed by multiple threads
+# This is the best kernel so far
 function gpu_vpm3!(s, t, num_cols, kernel)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
@@ -248,6 +249,7 @@ function gpu_vpm3!(s, t, num_cols, kernel)
 end
 
 # Each target has a seperate block. Each source interaction computed using a single thread
+# This turned out to be not so efficient
 function gpu_vpm4!(s, t)
     isource::Int32 = threadIdx().x
     itarget::Int32 = blockIdx().x
