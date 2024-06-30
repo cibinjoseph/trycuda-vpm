@@ -18,6 +18,9 @@ function get_inputs(ns, nfields; nt=0, T=Float32)
 
     src = rand(T, nfields, ns)
     trg = rand(T, nfields, nt)
+    # Zero initial target UJ
+    trg[10:12, :] .= zero(T)
+    trg[16:24, :] .= zero(T)
 
     src2 = deepcopy(src)
     trg2 = deepcopy(trg)
@@ -140,11 +143,11 @@ function cpu_vpm!(s, t)
             interaction!(t, s, i, j)
         end
     end
-    end
+end
 
-    # Naive implementation
-    # Each thread handles a single target and uses global GPU memory
-    function gpu_vpm1!(s, t)
+# Naive implementation
+# Each thread handles a single target and uses global GPU memory
+function gpu_vpm1!(s, t)
     idx::Int32 = threadIdx().x+(blockIdx().x-1)*blockDim().x
 
     t_size::Int32 = size(t, 2)
@@ -239,6 +242,7 @@ function gpu_vpm3!(s, t, num_cols, kernel)
     end
 
     # Sum up accelerations for each target/thread
+    # Each target will be accessed by q no. of threads
     for idx = 1:3
         @inbounds CUDA.@atomic t[9+idx, itarget] += U[idx]
     end
@@ -271,6 +275,112 @@ function gpu_vpm4!(s, t)
     end
     for idx = 1:9
         @inbounds CUDA.@atomic t[15+idx, itarget] += out[idx+3]
+    end
+    return
+end
+
+# Each thread handles a single target and uses local GPU memory
+# Sources divided into multiple columns and influence is computed by multiple threads
+# Final summation through parallel reduction instead of atomic reduction
+# This is the best kernel so far
+# - p is no. of targets per block. Typically same as no. of sources per block.
+# - q is no. of columns per tile
+# twork is a working space array
+function gpu_vpm5!(s, t, twork, num_cols, kernel)
+    t_size::Int32 = size(t, 2)
+    s_size::Int32 = size(s, 2)
+
+    ithread::Int32 = threadIdx().x
+    p::Int32 = t_size/gridDim().x
+
+    # Row and column indices of threads in a block
+    row = (ithread-1) % p + 1
+    col = floor(Int32, (ithread-1)/p) + 1
+
+    itarget::Int32 = row + (blockIdx().x-1)*p
+    @inbounds tx = t[1, itarget]
+    @inbounds ty = t[2, itarget]
+    @inbounds tz = t[3, itarget]
+
+    n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
+    bodies_per_col::Int32 = CUDA.ceil(Int32, p / num_cols)
+
+    sh_mem = CuDynamicSharedArray(eltype(t), (12, p))
+
+    # Variable initialization
+    U = @MVector zeros(eltype(t), 3)
+    J = @MVector zeros(eltype(t), 9)
+    idim::Int32 = 0
+    idx::Int32 = 0
+    i::Int32 = 0
+    isource::Int32 = 0
+
+    itile::Int32 = 1
+    while itile <= n_tiles
+        # Each thread will copy source coordinates corresponding to its index into shared memory. This will be done for each tile.
+        if (col == 1)
+            idx = row + (itile-1)*p
+            idim = 1
+            if idx <= s_size
+                while idim <= 7
+                    @inbounds sh_mem[idim, row] = s[idim, idx]
+                    idim += 1
+                end
+            else
+                while idim <= 7
+                    @inbounds sh_mem[idim, row] = zero(eltype(s))
+                    idim += 1
+                end
+            end
+        end
+        sync_threads()
+
+        # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
+        i = 1
+        while i <= bodies_per_col
+            isource = i + bodies_per_col*(col-1)
+            if isource <= s_size
+                out = gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
+
+                # Sum up influences for each source in a tile
+                idim = 1
+                while idim <= 3
+                    @inbounds U[idim] += out[idim]
+                    idim += 1
+                end
+                idim = 1
+                while idim <= 9
+                    @inbounds J[idim] += out[idim+3]
+                    idim += 1
+                end
+            end
+            i += 1
+        end
+        itile += 1
+        sync_threads()
+    end
+
+    # Write results to shared memory to prepare for parallel reduction
+    idx = ithread
+    for idim = 1:3
+        twork[idim, idx] += U[idim]
+    end
+    for idx = 1:9
+        twork[3+idim, idx] += J[idim]
+    end
+    sync_threads()
+    it::Int32 = threadIdx().x + blockDim().x*(blockIdx().x-1)
+    if it == 1
+        @cushow sh_mem[1, 1]
+    end
+
+    # Sum up accelerations for each target/thread
+    # Each target will be accessed by q no. of threads
+    for idx = 1:3
+        @inbounds CUDA.@atomic t[9+idx, itarget] += U[idx]
+    end
+    for idx = 1:9
+        @inbounds CUDA.@atomic t[15+idx, itarget] += J[idx]
     end
     return
 end
@@ -324,6 +434,26 @@ function benchmark4_gpu!(s, t)
     view(t, 16:24, :) .= Array(t_d[16:24, :])
 end
 
+function benchmark5_gpu!(s, t, p, q)
+    s_d = CuArray(view(s, 1:7, :))
+    t_d = CuArray(t)
+    kernel = gpu_g_dgdr
+
+    # Num of threads in a tile should always be 
+    # less than number of threads in a block (1024)
+    # or limited by memory size
+    threads::Int32 = p*q
+    blocks::Int32 = cld(size(t, 2), p)
+    shmem = sizeof(eltype(s)) * 12 * p  # XYZ + Γ123 + σ = 7 variables but 12 to handle UJ summation
+    twork = CUDA.zeros(eltype(t), (12, threads))
+    CUDA.@sync begin
+        @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm5!(s_d, t_d, twork, q, kernel)
+    end
+
+    view(t, 10:12, :) .= Array(t_d[10:12, :])
+    view(t, 16:24, :) .= Array(t_d[16:24, :])
+end
+
 function check_launch(n, p, q; T=Float32, throw_error=true)
     max_threads_per_block = T==Float32 ? 1024 : 256
 
@@ -353,10 +483,10 @@ function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
         if run_option == 1
             println("CPU Run")
             cpu_vpm!(src, trg)
+            @show trg[10, 1]
             println("GPU Run")
             # benchmark1_gpu!(src2, trg2)
             benchmark3_gpu!(src2, trg2, p, q)
-            # benchmark4_gpu!(src2, trg2)
             diff = abs.(trg .- trg2)
             err_norm = sqrt(sum(abs2, diff)/length(diff))
             diff_bool = diff .< eps(T)
@@ -379,7 +509,6 @@ function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
         else
             println("Running profiler...")
             CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q)
-            # CUDA.@profile external=true benchmark4_gpu!(src2, trg2, p, q)
         end
     else
         check_launch(nt, p, q)
@@ -387,7 +516,6 @@ function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
         src, trg, src2, trg2 = get_inputs(ns, nfields)
         t_cpu = @benchmark cpu_vpm!($src, $trg)
         t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q)
-        # t_gpu = @benchmark benchmark4_gpu!($src2, $trg2)
         speedup = median(t_cpu.times)/median(t_gpu.times)
         println("$ns $speedup")
     end
@@ -444,3 +572,4 @@ end
 # main(1; ns=8739, nt=3884, p=1, T=Float64, debug=true)
 # main(1; ns=33, p=11, T=Float64)
 # main(1; n=130, p=26, q=2, T=Float64)
+main(1; ns=8, nt=8, p=4, q=2)
