@@ -1,6 +1,7 @@
 using CUDA
 using BenchmarkTools
 using SpecialFunctions
+using ForwardDiff
 
 # Single precision constants
 const erxs = 8.45062911510467529297f-01
