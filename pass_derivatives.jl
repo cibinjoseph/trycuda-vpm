@@ -121,8 +121,15 @@ function get_net_interaction_gpu(x::Vector{T}) where T
     p, q = get_launch_config(nparticles; T=T)
     nthreads::Int32 = p*q
     nblocks::Int32 = cld(nparticles, p)
-    shmem = sizeof(T) * 7 * p
-    CUDA.@sync @cuda threads=nthreads blocks=nblocks shmem=shmem gpu_vpm3!(s_d, s_d, q, kernel)
+    shmem = sizeof(T) * (12*p) * p
+
+    # Check if shared memory is sufficient
+    dev = CUDA.device()
+    dev_shmem = CUDA.attribute(dev, CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK)
+    if shmem > dev_shmem
+        error("Shared memory requested exceeds available space on GPU")
+    end
+    CUDA.@sync @cuda threads=nthreads blocks=nblocks shmem=shmem gpu_vpm5!(s_d, s_d, q, kernel)
     view(src, 10:12, :) .= Array(s_d[10:12, :])
     view(src, 16:24, :) .= Array(s_d[16:24, :])
 
@@ -137,6 +144,8 @@ function get_net_interaction_gpu(x::Vector{T}) where T
 end
 
 @show get_net_interaction_gpu(x_gpu)
-@show df_ad = ForwardDiff.gradient(get_net_interaction_gpu, x_gpu)
+
+cfg1 = ForwardDiff.GradientConfig(get_net_interaction_gpu, x_gpu, ForwardDiff.Chunk{4}());
+@show df_ad = ForwardDiff.gradient(get_net_interaction_gpu, x_gpu, cfg1)
 # @show df_fd = FiniteDiff.finite_difference_gradient(get_net_interaction_gpu, x_gpu)
 # @assert isapprox(df_ad, df_fd; atol=tol)

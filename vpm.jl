@@ -357,11 +357,10 @@ function gpu_vpm5!(s, t, num_cols, kernel)
     if num_cols != 1
         # Perform write to shared memory
         # Columns correspond to each of the q threads
-        # Rows correspond to UJ and target index
-        # UJ[1] for each target is stored in contiguous rows from 1 to 12
+        # sh_mem[1:12, 1] is the first target, sh_mem[13:24, 1] is the second target and so on.
         idim = 1
         while idim <= 12
-            @inbounds sh_mem[itarget+p*(idim-1), col] = UJ[idim]
+            @inbounds sh_mem[idim + 12*(itarget-1), col] = UJ[idim]
             idim += 1
         end
 
@@ -373,17 +372,48 @@ function gpu_vpm5!(s, t, num_cols, kernel)
             while isource <= num_cols
                 idim = 1
                 while idim <= 3
-                    @inbounds t[9+idim, itarget] += sh_mem[itarget+p*(idim-1), isource]
+                    @inbounds t[9+idim, itarget] += sh_mem[idim+12*(itarget-1), isource]
                     idim += 1
                 end
                 idim = 4
                 while idim <= 12
-                    @inbounds t[12+idim, itarget] += sh_mem[itarget+p*(idim-1), isource]
+                    @inbounds t[12+idim, itarget] += sh_mem[idim+12*(itarget-1), isource]
                     idim += 1
                 end
                 isource += 1
             end
         end
+
+        # Parallel reduction sum
+        # Only works for even numbers at the moment
+        # stride::Int32 = 1
+        # idim = 1
+        # while stride < num_cols
+        #     i = (threadIdx().x-1)*stride*2+1
+        #     if i <= num_cols
+        #         idim = 1
+        #         while idim <= 12*p
+        #             sh_mem[idim, i] += sh_mem[idim, i+stride]
+        #             idim += 1
+        #         end
+        #     end
+        #     stride *= 2
+        #     sync_threads()
+        # end
+        #
+        # # Copy values to target in global mem
+        # if col == 1
+        #     idim = 1
+        #     while idim <= 3
+        #         @inbounds t[9+idim, itarget] += sh_mem[idim+12*(itarget-1), 1]
+        #         idim += 1
+        #     end
+        #     idim = 4
+        #     while idim <= 12
+        #         @inbounds t[12+idim, itarget] += sh_mem[idim+12*(itarget-1), 1]
+        #         idim += 1
+        #     end
+        # end
 
     else
 
@@ -514,9 +544,13 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
                 # writedlm("trg_cpu.dat", trg[10, :])
                 # writedlm("trg_gpu.dat", trg2[10, :])
                 if ns < 10 && debug
-                    display(trg[10:12])
-                    display(trg2[10:12])
-                    display(diff[10:12])
+                    display(trg[10:12, :])
+                    display(trg2[10:12, :])
+                    display(diff[10:12, :])
+                    println("J vals")
+                    display(trg[16:24, :])
+                    display(trg2[16:24, :])
+                    display(diff[16:24, :])
                 end
                 n_diff = count(==(false), diff_bool)
                 n_total = size(trg, 1)*size(trg, 2)
@@ -586,8 +620,8 @@ end
 #     main(3; n=2^i, p=256, T=Float32)
 # end
 # main(1; ns=2, p=256, T=Float32, debug=true)
-main(3; ns=2^9, nt=2^12, T=Float32, debug=true)
+# main(3; ns=2^9, nt=2^12, T=Float32, debug=true)
 # main(1; ns=8739, nt=3884, p=1, T=Float64, debug=true)
 # main(1; ns=33, p=11, T=Float64)
 # main(1; n=130, p=26, q=2, T=Float64)
-# main(1; ns=8, nt=8, p=4, q=2, debug=true)
+main(1; ns=8, nt=8, p=4, q=2, debug=true)
