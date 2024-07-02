@@ -166,7 +166,6 @@ end
 
 # Each thread handles a single target and uses local GPU memory
 # Sources divided into multiple columns and influence is computed by multiple threads
-# This is the best kernel so far
 function gpu_vpm3!(s, t, num_cols, kernel)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
@@ -189,8 +188,7 @@ function gpu_vpm3!(s, t, num_cols, kernel)
     sh_mem = CuDynamicSharedArray(eltype(t), (7, tile_dim))
 
     # Variable initialization
-    U = @MVector zeros(eltype(t), 3)
-    J = @MVector zeros(eltype(t), 9)
+    UJ = @MVector zeros(eltype(t), 12)
     idim::Int32 = 0
     idx::Int32 = 0
     i::Int32 = 0
@@ -225,13 +223,8 @@ function gpu_vpm3!(s, t, num_cols, kernel)
 
                 # Sum up influences for each source in a tile
                 idim = 1
-                while idim <= 3
-                    @inbounds U[idim] += out[idim]
-                    idim += 1
-                end
-                idim = 1
-                while idim <= 9
-                    @inbounds J[idim] += out[idim+3]
+                while idim <= 12
+                    @inbounds UJ[idim] += out[idim]
                     idim += 1
                 end
             end
@@ -243,11 +236,15 @@ function gpu_vpm3!(s, t, num_cols, kernel)
 
     # Sum up accelerations for each target/thread
     # Each target will be accessed by q no. of threads
-    for idx = 1:3
-        @inbounds CUDA.@atomic t[9+idx, itarget] += U[idx]
+    idx = 1
+    while idx <= 3
+        @inbounds CUDA.@atomic t[9+idx, itarget] += UJ[idx]
+        idx += 1
     end
-    for idx = 1:9
-        @inbounds CUDA.@atomic t[15+idx, itarget] += J[idx]
+    idx = 4
+    while idx <= 12
+        @inbounds CUDA.@atomic t[12+idx, itarget] += UJ[idx]
+        idx += 1
     end
     return
 end
@@ -285,8 +282,7 @@ end
 # This is the best kernel so far
 # - p is no. of targets per block. Typically same as no. of sources per block.
 # - q is no. of columns per tile
-# twork is a working space array
-function gpu_vpm5!(s, t, twork, num_cols, kernel)
+function gpu_vpm5!(s, t, num_cols, kernel)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
 
@@ -305,11 +301,10 @@ function gpu_vpm5!(s, t, twork, num_cols, kernel)
     n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
     bodies_per_col::Int32 = CUDA.ceil(Int32, p / num_cols)
 
-    sh_mem = CuDynamicSharedArray(eltype(t), (12, p))
+    sh_mem = CuDynamicSharedArray(eltype(t), (12*p, p))
 
     # Variable initialization
-    U = @MVector zeros(eltype(t), 3)
-    J = @MVector zeros(eltype(t), 9)
+    UJ = @MVector zeros(eltype(t), 12)
     idim::Int32 = 0
     idx::Int32 = 0
     i::Int32 = 0
@@ -342,15 +337,12 @@ function gpu_vpm5!(s, t, twork, num_cols, kernel)
             if isource <= s_size
                 out = gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
 
-                # Sum up influences for each source in a tile
+                # Sum up influences for each source in a column in the tile
+                # This UJ resides in the local memory of the thread corresponding
+                # to each column, so we haven't summed up over the tile yet.
                 idim = 1
-                while idim <= 3
-                    @inbounds U[idim] += out[idim]
-                    idim += 1
-                end
-                idim = 1
-                while idim <= 9
-                    @inbounds J[idim] += out[idim+3]
+                while idim <= 12
+                    @inbounds UJ[idim] += out[idim]
                     idim += 1
                 end
             end
@@ -360,27 +352,51 @@ function gpu_vpm5!(s, t, twork, num_cols, kernel)
         sync_threads()
     end
 
-    # Write results to shared memory to prepare for parallel reduction
-    idx = ithread
-    for idim = 1:3
-        twork[idim, idx] += U[idim]
-    end
-    for idx = 1:9
-        twork[3+idim, idx] += J[idim]
-    end
-    sync_threads()
-    it::Int32 = threadIdx().x + blockDim().x*(blockIdx().x-1)
-    if it == 1
-        @cushow sh_mem[1, 1]
-    end
-
     # Sum up accelerations for each target/thread
     # Each target will be accessed by q no. of threads
-    for idx = 1:3
-        @inbounds CUDA.@atomic t[9+idx, itarget] += U[idx]
-    end
-    for idx = 1:9
-        @inbounds CUDA.@atomic t[15+idx, itarget] += J[idx]
+    if num_cols != 1
+        # Perform write to shared memory
+        # Columns correspond to each of the q threads
+        # Rows correspond to UJ and target index
+        # UJ[1] for each target is stored in contiguous rows from 1 to 12
+        idim = 1
+        while idim <= 12
+            @inbounds sh_mem[itarget+p*(idim-1), col] = UJ[idim]
+            idim += 1
+        end
+
+        sync_threads()
+
+        # Write data from shared mem to global mem (sum using single thread for now)
+        if col == 1
+            isource = 1
+            while isource <= num_cols
+                idim = 1
+                while idim <= 3
+                    @inbounds t[9+idim, itarget] += sh_mem[itarget+p*(idim-1), isource]
+                    idim += 1
+                end
+                idim = 4
+                while idim <= 12
+                    @inbounds t[12+idim, itarget] += sh_mem[itarget+p*(idim-1), isource]
+                    idim += 1
+                end
+                isource += 1
+            end
+        end
+
+    else
+
+        idim = 1
+        while idim <= 3
+            @inbounds t[9+idim, itarget] += UJ[idim]
+            idim += 1
+        end
+        idim = 4
+        while idim <= 12
+            @inbounds t[12+idim, itarget] += UJ[idim]
+            idim += 1
+        end
     end
     return
 end
@@ -444,10 +460,9 @@ function benchmark5_gpu!(s, t, p, q)
     # or limited by memory size
     threads::Int32 = p*q
     blocks::Int32 = cld(size(t, 2), p)
-    shmem = sizeof(eltype(s)) * 12 * p  # XYZ + Γ123 + σ = 7 variables but 12 to handle UJ summation
-    twork = CUDA.zeros(eltype(t), (12, threads))
+    shmem = sizeof(eltype(s)) * (12*p) * p  # XYZ + Γ123 + σ = 7 variables but (12*p*q) to handle UJ summation for each target
     CUDA.@sync begin
-        @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm5!(s_d, t_d, twork, q, kernel)
+        @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm5!(s_d, t_d, q, kernel)
     end
 
     view(t, 10:12, :) .= Array(t_d[10:12, :])
@@ -468,9 +483,11 @@ function check_launch(n, p, q; T=Float32, throw_error=true)
     return isgood
 end
 
-function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
+function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
     nt = nt==0 ? ns : nt
-    p = min(p, nt)
+    if p == 0
+        p, q = get_launch_config(nt; T=T)
+    end
     println("No. of sources: $ns")
     println("No. of targets: $nt")
     println("Tile size, p: $p")
@@ -483,10 +500,10 @@ function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
         if run_option == 1
             println("CPU Run")
             cpu_vpm!(src, trg)
-            @show trg[10, 1]
             println("GPU Run")
             # benchmark1_gpu!(src2, trg2)
-            benchmark3_gpu!(src2, trg2, p, q)
+            # benchmark3_gpu!(src2, trg2, p, q)
+            benchmark5_gpu!(src2, trg2, p, q)
             diff = abs.(trg .- trg2)
             err_norm = sqrt(sum(abs2, diff)/length(diff))
             diff_bool = diff .< eps(T)
@@ -508,14 +525,15 @@ function main(run_option; ns=2^5, nt=0, p=1, q=1, T=Float32, debug=false)
             end
         else
             println("Running profiler...")
-            CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q)
+            CUDA.@profile external=true benchmark5_gpu!(src2, trg2, p, q)
         end
     else
         check_launch(nt, p, q)
 
         src, trg, src2, trg2 = get_inputs(ns, nfields)
         t_cpu = @benchmark cpu_vpm!($src, $trg)
-        t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q)
+        # t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q)
+        t_gpu = @benchmark benchmark5_gpu!($src2, $trg2, $p, $q)
         speedup = median(t_cpu.times)/median(t_gpu.times)
         println("$ns $speedup")
     end
@@ -568,8 +586,8 @@ end
 #     main(3; n=2^i, p=256, T=Float32)
 # end
 # main(1; ns=2, p=256, T=Float32, debug=true)
-# main(3; ns=2^9, nt=2^12, T=Float32, debug=true)
+main(3; ns=2^9, nt=2^12, T=Float32, debug=true)
 # main(1; ns=8739, nt=3884, p=1, T=Float64, debug=true)
 # main(1; ns=33, p=11, T=Float64)
 # main(1; n=130, p=26, q=2, T=Float64)
-main(1; ns=8, nt=8, p=4, q=2)
+# main(1; ns=8, nt=8, p=4, q=2, debug=true)
