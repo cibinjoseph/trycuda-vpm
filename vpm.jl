@@ -269,7 +269,7 @@ function gpu_vpm4!(s, t, num_cols, gb_mem, kernel)
     n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
     bodies_per_col::Int32 = CUDA.ceil(Int32, p / num_cols)
 
-    sh_mem = CuDynamicSharedArray(eltype(t), (12, p))
+    sh_mem = CuDynamicSharedArray(eltype(t), (7*p, p))
 
     # Variable initialization
     UJ = @MVector zeros(eltype(t), 12)
@@ -348,19 +348,28 @@ function gpu_vpm4!(s, t, num_cols, gb_mem, kernel)
 end
 
 function gpu_reduction!(gb_mem)
+    ithread::int32 = threadIdx().x
+    sh_mem = CuDynamicSharedArray(eltype(gb_mem), p)
+
     # Each thread copies content to shared memory
-    sh_mem[blockIdx().x, threadIdx().x] = gb_mem[blockIdx().x, threadIdx().x]
+    sh_mem[threadIdx().x] = gb_mem[blockIdx().x, ithread]
 
     # Perform parallel reduction
     stride::Int32 = 1
     while stride < blockDim().x
-        i = (threadIdx().x-1)*stride*2+1
+        i = (ithread-1)*stride*2+1
         if i <= blockDim().x
-            @inbounds sh_mem[blockIdx().x, i] += sh_mem[idim, i+stride]
+            sh_mem[i] += sh_mem[i+stride]
         end
         stride *= 2
         sync_threads()
     end
+
+    # Copy from shared memory to global memory
+    if ithread == 1
+        gb_mem[blockIdx().x, 1] = shmem[1]
+    end
+    return
 end
 
 # Each thread handles a single target and uses local GPU memory
@@ -547,7 +556,7 @@ function benchmark3_gpu!(s, t, p, q)
     view(t, 16:24, :) .= Array(t_d[16:24, :])
 end
 
-function benchmark4_gpu!(s, t)
+function benchmark4_gpu!(s, t, p, q)
     s_d = CuArray(view(s, 1:7, :))
     t_d = CuArray(view(t, 1:24, :))
     kernel = gpu_g_dgdr
@@ -558,10 +567,10 @@ function benchmark4_gpu!(s, t)
     threads::Int32 = p*q
     blocks::Int32 = cld(size(t, 2), p)
     shmem = sizeof(eltype(s)) * 7 * p  # XYZ + Γ123 + σ = 7 variables but (12*p) to handle UJ summation for each target
-    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm5!(s_d, t_d, q, gb_mem, kernel)
+    gb_mem = CUDA.zeros(eltype(t_d), 12*p, q)
+    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm4!(s_d, t_d, q, gb_mem, kernel)
 
     # Parallel reduction on 12p targets, with q partial influences
-    gb_mem == CUDA.zeros(eltype(t_d), 12*p, q)
     shmem = sizeof(eltype(s)) * p
     threads = q
     blocks = 12*p
@@ -628,6 +637,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
             cpu_vpm!(src, trg)
             println("GPU Run")
             # benchmark1_gpu!(src2, trg2)
+            benchmark4_gpu!(src2, trg2, p, q)
             # benchmark3_gpu!(src2, trg2, p, q)
             benchmark5_gpu!(src2, trg2, p, q)
             diff = abs.(trg .- trg2)
@@ -663,7 +673,8 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
         src, trg, src2, trg2 = get_inputs(ns, nfields)
         t_cpu = @benchmark cpu_vpm!($src, $trg)
         # t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q)
-        t_gpu = @benchmark benchmark5_gpu!($src2, $trg2, $p, $q)
+        t_gpu = @benchmark benchmark4_gpu!($src2, $trg2, $p, $q)
+        # t_gpu = @benchmark benchmark5_gpu!($src2, $trg2, $p, $q)
         speedup = median(t_cpu.times)/median(t_gpu.times)
         println("$ns $speedup")
     end
@@ -720,4 +731,4 @@ end
 # main(1; ns=8739, nt=3884, p=1, T=Float64, debug=true)
 # main(1; ns=33, p=11, T=Float64)
 # main(1; n=130, p=26, q=2, T=Float64)
-# main(1; ns=8, nt=8, p=4, q=2, T=Float64, debug=true)
+main(1; ns=8, nt=8, p=4, q=2, T=Float64, debug=true)
