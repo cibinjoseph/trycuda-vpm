@@ -301,7 +301,7 @@ function gpu_vpm5!(s, t, num_cols, kernel)
     n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
     bodies_per_col::Int32 = CUDA.ceil(Int32, p / num_cols)
 
-    sh_mem = CuDynamicSharedArray(eltype(t), (12*p, p))
+    sh_mem = CuDynamicSharedArray(eltype(t), (12, p))
 
     # Variable initialization
     UJ = @MVector zeros(eltype(t), 12)
@@ -357,77 +357,63 @@ function gpu_vpm5!(s, t, num_cols, kernel)
     if num_cols != 1
         # Perform write to shared memory
         # Columns correspond to each of the q threads
-        # sh_mem[1:12, 1] is the first target, sh_mem[13:24, 1] is the second target and so on.
-        idim = 1
-        while idim <= 12
-            @inbounds sh_mem[idim + 12*(itarget-1), col] = UJ[idim]
-            idim += 1
-        end
-
-        sync_threads()
-
-        # Write data from shared mem to global mem (sum using single thread for now)
-        if col == 1
-            isource = 1
-            while isource <= num_cols
+        # Iterate over targets and do reduction
+        it::Int32 = 1
+        while it <= p
+            # Threads corresponding to itarget will copy their data to shared mem
+            if itarget == it+p*(blockIdx().x-1)
                 idim = 1
-                while idim <= 3
-                    @inbounds t[9+idim, itarget] += sh_mem[idim+12*(itarget-1), isource]
-                    idim += 1
-                end
-                idim = 4
                 while idim <= 12
-                    @inbounds t[12+idim, itarget] += sh_mem[idim+12*(itarget-1), isource]
+                    sh_mem[idim, col] = UJ[idim]
                     idim += 1
                 end
-                isource += 1
             end
+            sync_threads()
+
+            # All p*q threads do parallel reduction on data
+            stride::Int32 = 1
+            while stride < num_cols
+                i = (threadIdx().x-1)*stride*2+1
+                if i <= num_cols
+                    idim = 1
+                    while idim <= 12  # This can be parallelized too
+                        sh_mem[idim, i] += sh_mem[idim, i+stride]
+                        idim += 1
+                    end
+                end
+                stride *= 2
+                sync_threads()
+            end
+
+            # col 1 of the threads that handle it target
+            # writes reduced data to its own local memory
+            if itarget == it+p*(blockIdx().x-1) && col == 1
+                idim = 1
+                while idim <= 12
+                    UJ[idim] = sh_mem[idim, 1]
+                    idim += 1
+                end
+            end
+
+            it += 1
         end
+    end
 
-        # Parallel reduction sum
-        # Only works for even numbers at the moment
-        # stride::Int32 = 1
-        # idim = 1
-        # while stride < num_cols
-        #     i = (threadIdx().x-1)*stride*2+1
-        #     if i <= num_cols
-        #         idim = 1
-        #         while idim <= 12*p
-        #             sh_mem[idim, i] += sh_mem[idim, i+stride]
-        #             idim += 1
-        #         end
-        #     end
-        #     stride *= 2
-        #     sync_threads()
-        # end
-        #
-        # # Copy values to target in global mem
-        # if col == 1
-        #     idim = 1
-        #     while idim <= 3
-        #         @inbounds t[9+idim, itarget] += sh_mem[idim+12*(itarget-1), 1]
-        #         idim += 1
-        #     end
-        #     idim = 4
-        #     while idim <= 12
-        #         @inbounds t[12+idim, itarget] += sh_mem[idim+12*(itarget-1), 1]
-        #         idim += 1
-        #     end
-        # end
-
-    else
-
+    # Now, each col 1 has the net influence of all sources on its target
+    # Write all data back to global memory
+    if col == 1
         idim = 1
         while idim <= 3
-            @inbounds t[9+idim, itarget] += UJ[idim]
+            t[9+idim, itarget] += UJ[idim]
             idim += 1
         end
         idim = 4
-        while idim <= 12
-            @inbounds t[12+idim, itarget] += UJ[idim]
+        while idim<= 12
+            t[12+idim, itarget] += UJ[idim]
             idim += 1
         end
     end
+
     return
 end
 
@@ -490,7 +476,7 @@ function benchmark5_gpu!(s, t, p, q)
     # or limited by memory size
     threads::Int32 = p*q
     blocks::Int32 = cld(size(t, 2), p)
-    shmem = sizeof(eltype(s)) * (12*p) * p  # XYZ + Γ123 + σ = 7 variables but (12*p*q) to handle UJ summation for each target
+    shmem = sizeof(eltype(s)) * 12 * p  # XYZ + Γ123 + σ = 7 variables but (12*p) to handle UJ summation for each target
     CUDA.@sync begin
         @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm5!(s_d, t_d, q, kernel)
     end
@@ -518,12 +504,12 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
     if p == 0
         p, q = get_launch_config(nt; T=T)
     end
+    if run_option == 1 || run_option == 2
     println("No. of sources: $ns")
     println("No. of targets: $nt")
     println("Tile size, p: $p")
     println("Cols per tile, q: $q")
 
-    if run_option == 1 || run_option == 2
         check_launch(nt, p, q; T=T)
 
         src, trg, src2, trg2 = get_inputs(ns, nfields; T=T, nt=nt)
@@ -547,10 +533,10 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
                     display(trg[10:12, :])
                     display(trg2[10:12, :])
                     display(diff[10:12, :])
-                    println("J vals")
-                    display(trg[16:24, :])
-                    display(trg2[16:24, :])
-                    display(diff[16:24, :])
+                    # println("J vals")
+                    # display(trg[16:24, :])
+                    # display(trg2[16:24, :])
+                    # display(diff[16:24, :])
                 end
                 n_diff = count(==(false), diff_bool)
                 n_total = size(trg, 1)*size(trg, 2)
@@ -616,12 +602,12 @@ function get_launch_config(nt; T=Float32, p_max=256)
 end
 
 # Run_option - # [1]test [2]profile [3]benchmark
-# for i in 7:17
-#     main(3; n=2^i, p=256, T=Float32)
-# end
+for i in 7:17
+    main(3; ns=2^i, T=Float32)
+end
 # main(1; ns=2, p=256, T=Float32, debug=true)
 # main(3; ns=2^9, nt=2^12, T=Float32, debug=true)
 # main(1; ns=8739, nt=3884, p=1, T=Float64, debug=true)
 # main(1; ns=33, p=11, T=Float64)
 # main(1; n=130, p=26, q=2, T=Float64)
-main(1; ns=8, nt=8, p=4, q=2, debug=true)
+# main(1; ns=8, nt=8, p=4, q=2, T=Float64, debug=true)
