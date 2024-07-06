@@ -269,7 +269,7 @@ function gpu_vpm4!(s, t, num_cols, gb_mem, kernel)
     n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
     bodies_per_col::Int32 = CUDA.ceil(Int32, p / num_cols)
 
-    sh_mem = CuDynamicSharedArray(eltype(t), (7*p, p))
+    sh_mem = CuDynamicSharedArray(eltype(t), (7, p))
 
     # Variable initialization
     UJ = @MVector zeros(eltype(t), 12)
@@ -348,8 +348,8 @@ function gpu_vpm4!(s, t, num_cols, gb_mem, kernel)
 end
 
 function gpu_reduction!(gb_mem)
-    ithread::int32 = threadIdx().x
-    sh_mem = CuDynamicSharedArray(eltype(gb_mem), p)
+    ithread::Int32 = threadIdx().x
+    sh_mem = CuDynamicSharedArray(eltype(gb_mem), blockDim().x)
 
     # Each thread copies content to shared memory
     sh_mem[threadIdx().x] = gb_mem[blockIdx().x, ithread]
@@ -367,7 +367,7 @@ function gpu_reduction!(gb_mem)
 
     # Copy from shared memory to global memory
     if ithread == 1
-        gb_mem[blockIdx().x, 1] = shmem[1]
+        gb_mem[blockIdx().x, 1] = sh_mem[1]
     end
     return
 end
@@ -577,14 +577,14 @@ function benchmark4_gpu!(s, t, p, q)
     @cuda threads=threads blocks=blocks shmem=shmem gpu_reduction!(gb_mem)
 
     # Copy from gb_mem to target particles
-    for it = 1:size(t, 2)
-        for idim = 1:3
-            t[9+idim, it] = Array(gb_mem[idim+12*(it-1), 1])
-        end
-        for idim = 1:9
-            t[15+idim, it] = Array(gb_mem[3+idim+12*(it-1), 1])
-        end
-    end
+    # for it = 1:size(t, 2)
+    #     for idim = 1:3
+    #         t[9+idim, it] = Array(gb_mem[idim+12*(it-1), 1])
+    #     end
+    #     for idim = 1:9
+    #         t[15+idim, it] = Array(gb_mem[3+idim+12*(it-1), 1])
+    #     end
+    # end
 end
 
 function benchmark5_gpu!(s, t, p, q)
