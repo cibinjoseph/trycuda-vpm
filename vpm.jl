@@ -347,27 +347,36 @@ function gpu_vpm4!(s, t, num_cols, gb_mem, kernel)
     return
 end
 
-function gpu_reduction!(gb_mem)
-    ithread::Int32 = threadIdx().x
-    sh_mem = CuDynamicSharedArray(eltype(gb_mem), blockDim().x)
+function gpu_reduction!(gb_mem, t)
+    tIdx::Int32 = threadIdx().x
+    bDim::Int32 = blockDim().x
+    bIdx::Int32 = blockIdx().x
+    sh_mem = CuDynamicSharedArray(eltype(gb_mem), bDim)
 
     # Each thread copies content to shared memory
-    sh_mem[threadIdx().x] = gb_mem[blockIdx().x, ithread]
+    @inbounds sh_mem[tIdx] = gb_mem[bIdx, tIdx]
 
     # Perform parallel reduction
     stride::Int32 = 1
-    while stride < blockDim().x
-        i = (ithread-1)*stride*2+1
-        if i <= blockDim().x
-            sh_mem[i] += sh_mem[i+stride]
+    i::Int32 = 0
+    while stride < bDim
+        i = (tIdx-1)*stride*2+1
+        if i <= bDim
+            @inbounds sh_mem[i] += sh_mem[i+stride]
         end
         stride *= 2
         sync_threads()
     end
 
-    # Copy from shared memory to global memory
-    if ithread == 1
-        gb_mem[blockIdx().x, 1] = sh_mem[1]
+    # Copy from shared memory to target in global memory
+    i = (bIdx-1) % 12 + 1
+    stride = ceil(bIdx / 12)
+    if tIdx == 1
+        if i <= 3
+            @inbounds t[9+i, stride] += sh_mem[1]
+        else
+            @inbounds t[12+i, stride] += sh_mem[1]
+        end
     end
     return
 end
@@ -511,12 +520,12 @@ function gpu_vpm5!(s, t, num_cols, kernel)
     if col == 1
         idim = 1
         while idim <= 3
-            t[9+idim, itarget] += UJ[idim]
+            @inbounds t[9+idim, itarget] += UJ[idim]
             idim += 1
         end
         idim = 4
         while idim<= 12
-            t[12+idim, itarget] += UJ[idim]
+            @inbounds t[12+idim, itarget] += UJ[idim]
             idim += 1
         end
     end
@@ -559,32 +568,26 @@ end
 function benchmark4_gpu!(s, t, p, q)
     s_d = CuArray(view(s, 1:7, :))
     t_d = CuArray(view(t, 1:24, :))
+    t_size = size(t_d, 2)
     kernel = gpu_g_dgdr
 
     # Num of threads in a tile should always be 
     # less than number of threads in a block (1024)
     # or limited by memory size
     threads::Int32 = p*q
-    blocks::Int32 = cld(size(t, 2), p)
+    blocks::Int32 = cld(t_size, p)
     shmem = sizeof(eltype(s)) * 7 * p  # XYZ + Γ123 + σ = 7 variables but (12*p) to handle UJ summation for each target
-    gb_mem = CUDA.zeros(eltype(t_d), 12*p, q)
+    gb_mem = CUDA.zeros(eltype(t_d), 12*t_size, q)
     @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm4!(s_d, t_d, q, gb_mem, kernel)
 
     # Parallel reduction on 12p targets, with q partial influences
     shmem = sizeof(eltype(s)) * p
     threads = q
-    blocks = 12*p
-    @cuda threads=threads blocks=blocks shmem=shmem gpu_reduction!(gb_mem)
+    blocks = 12*t_size
+    @cuda threads=threads blocks=blocks shmem=shmem gpu_reduction!(gb_mem, t_d)
 
-    # Copy from gb_mem to target particles
-    # for it = 1:size(t, 2)
-    #     for idim = 1:3
-    #         t[9+idim, it] = Array(gb_mem[idim+12*(it-1), 1])
-    #     end
-    #     for idim = 1:9
-    #         t[15+idim, it] = Array(gb_mem[3+idim+12*(it-1), 1])
-    #     end
-    # end
+    view(t, 10:12, :) .= Array(t_d[10:12, :])
+    view(t, 16:24, :) .= Array(t_d[16:24, :])
 end
 
 function benchmark5_gpu!(s, t, p, q)
@@ -636,10 +639,9 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
             println("CPU Run")
             cpu_vpm!(src, trg)
             println("GPU Run")
-            # benchmark1_gpu!(src2, trg2)
-            benchmark4_gpu!(src2, trg2, p, q)
             # benchmark3_gpu!(src2, trg2, p, q)
-            benchmark5_gpu!(src2, trg2, p, q)
+            benchmark4_gpu!(src2, trg2, p, q)
+            # benchmark5_gpu!(src2, trg2, p, q)
             diff = abs.(trg .- trg2)
             err_norm = sqrt(sum(abs2, diff)/length(diff))
             diff_bool = diff .< eps(T)
@@ -665,7 +667,9 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
             end
         else
             println("Running profiler...")
-            CUDA.@profile external=true benchmark5_gpu!(src2, trg2, p, q)
+            # CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q)
+            CUDA.@profile external=true benchmark4_gpu!(src2, trg2, p, q)
+            # CUDA.@profile external=true benchmark5_gpu!(src2, trg2, p, q)
         end
     else
         check_launch(nt, p, q)
@@ -730,5 +734,5 @@ end
 # main(3; ns=2^9, nt=2^12, T=Float32, debug=true)
 # main(1; ns=8739, nt=3884, p=1, T=Float64, debug=true)
 # main(1; ns=33, p=11, T=Float64)
-# main(1; n=130, p=26, q=2, T=Float64)
+# main(1; ns=130, p=26, q=2, T=Float64)
 main(1; ns=8, nt=8, p=4, q=2, T=Float64, debug=true)
