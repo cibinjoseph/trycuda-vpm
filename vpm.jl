@@ -410,6 +410,7 @@ function gpu_vpm5!(s, t, num_cols, kernel)
 
     # Variable initialization
     UJ = @MVector zeros(eltype(t), 12)
+    out = @MVector zeros(eltype(t), 12)
     idim::Int32 = 0
     idx::Int32 = 0
     i::Int32 = 0
@@ -440,7 +441,7 @@ function gpu_vpm5!(s, t, num_cols, kernel)
         while i <= bodies_per_col
             isource = i + bodies_per_col*(col-1)
             if isource <= s_size
-                out = gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
+                out .= gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
 
                 # Sum up influences for each source in a column in the tile
                 # This UJ resides in the local memory of the thread corresponding
@@ -479,7 +480,7 @@ function gpu_vpm5!(s, t, num_cols, kernel)
             stride::Int32 = 1
             while stride < num_cols
                 i = (threadIdx().x-1)*stride*2+1
-                if i <= num_cols
+                if i+stride <= num_cols
                     idim = 1
                     while idim <= 12  # This can be parallelized too
                         @inbounds sh_mem[idim, i] += sh_mem[idim, i+stride]
@@ -490,7 +491,7 @@ function gpu_vpm5!(s, t, num_cols, kernel)
                 sync_threads()
             end
 
-            # col 1 of the threads that handle it target
+            # col 1 of the threads that handle 'it' target
             # writes reduced data to its own local memory
             if itarget == it+p*(blockIdx().x-1) && col == 1
                 idim = 1
@@ -501,17 +502,6 @@ function gpu_vpm5!(s, t, num_cols, kernel)
             end
 
             it += 1
-        end
-    else
-        idim = 1
-        while idim <= 3
-            @inbounds t[9+idim, itarget] += UJ[idim]
-            idim += 1
-        end
-        idim = 4
-        while idim <= 12
-            @inbounds t[12+idim, itarget] += UJ[idim]
-            idim += 1
         end
     end
 
@@ -640,8 +630,8 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
             cpu_vpm!(src, trg)
             println("GPU Run")
             # benchmark3_gpu!(src2, trg2, p, q)
-            benchmark4_gpu!(src2, trg2, p, q)
-            # benchmark5_gpu!(src2, trg2, p, q)
+            # benchmark4_gpu!(src2, trg2, p, q)
+            benchmark5_gpu!(src2, trg2, p, q)
             diff = abs.(trg .- trg2)
             err_norm = sqrt(sum(abs2, diff)/length(diff))
             diff_bool = diff .< eps(T)
@@ -735,4 +725,4 @@ end
 # main(1; ns=8739, nt=3884, p=1, T=Float64, debug=true)
 # main(1; ns=33, p=11, T=Float64)
 # main(1; ns=130, p=26, q=2, T=Float64)
-main(1; ns=8, nt=8, p=4, q=2, T=Float64, debug=true)
+main(1; ns=8, p=4, q=2, T=Float64, debug=true)
