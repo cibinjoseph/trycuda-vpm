@@ -2,7 +2,7 @@ using CUDA
 using Random
 
 @inline function f!(mat)
-    j = threadIdx().x
+    j = threadIdx().x + blockDim().x * (blockIdx().x-1)
     i = 1
     while i <= 4
         mat[i, j] = i + 1
@@ -20,7 +20,14 @@ n1 = cld(n, 2)
 n2 = n - n1
 
 ndevices = length(devices())
-if ndevices == 2
+if ndevices == 1
+    mat_gpu = CuArray(mat_cpu)
+    threads = min(n, 1024)
+    blocks = cld(n, threads)
+    @cuda threads=threads blocks=blocks f!(mat_gpu)
+    mat_cpu .= Array(mat_gpu)
+
+elseif ndevices == 2
     @sync begin
         @async begin
             # Device 1
@@ -42,6 +49,7 @@ if ndevices == 2
             mat_cpu[:, n1+1:n] .= Array(mat_gpu2)
         end
     end
+
 else
-    println("Only $ndevices found")
+    println("$ndevices GPU devices found")
 end
