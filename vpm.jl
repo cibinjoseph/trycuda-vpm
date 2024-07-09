@@ -598,7 +598,7 @@ function benchmark5_gpu!(s, t, p, q)
 end
 
 function check_launch(n, p, q; T=Float32, throw_error=true)
-    max_threads_per_block = T==Float32 ? 1024 : 256
+    max_threads_per_block = T==Float32 ? 768 : 256
 
     isgood = true
 
