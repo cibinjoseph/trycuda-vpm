@@ -166,29 +166,32 @@ end
 
 # Each thread handles a single target and uses local GPU memory
 # Sources divided into multiple columns and influence is computed by multiple threads
-function gpu_vpm3!(s, t, num_cols, kernel)
+function gpu_vpm3!(s, t, p, num_cols, kernel)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
 
     ithread::Int32 = threadIdx().x
-    tile_dim::Int32 = t_size/gridDim().x
 
     # Row and column indices of threads in a block
-    row = (ithread-1) % tile_dim + 1
-    col = floor(Int32, (ithread-1)/tile_dim) + 1
+    row = (ithread-1) % p + 1
+    col = floor(Int32, (ithread-1)/p) + 1
 
-    itarget::Int32 = row + (blockIdx().x-1)*tile_dim
-    @inbounds tx = t[1, itarget]
-    @inbounds ty = t[2, itarget]
-    @inbounds tz = t[3, itarget]
+    itarget::Int32 = row + (blockIdx().x-1)*p
+    txyz = @MVector zeros(eltype(t), 3)
+    if itarget <= t_size
+        @inbounds tx = t[1, itarget]
+        @inbounds ty = t[2, itarget]
+        @inbounds tz = t[3, itarget]
+    end
 
-    n_tiles::Int32 = CUDA.ceil(Int32, s_size / tile_dim)
-    bodies_per_col::Int32 = CUDA.ceil(Int32, tile_dim / num_cols)
+    n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
+    bodies_per_col::Int32 = CUDA.ceil(Int32, p / num_cols)
 
-    sh_mem = CuDynamicSharedArray(eltype(t), (7, tile_dim))
+    sh_mem = CuDynamicSharedArray(eltype(t), (7, p))
 
     # Variable initialization
     UJ = @MVector zeros(eltype(t), 12)
+    out = @MVector zeros(eltype(t), 12)
     idim::Int32 = 0
     idx::Int32 = 0
     i::Int32 = 0
@@ -198,7 +201,7 @@ function gpu_vpm3!(s, t, num_cols, kernel)
     while itile <= n_tiles
         # Each thread will copy source coordinates corresponding to its index into shared memory. This will be done for each tile.
         if (col == 1)
-            idx = row + (itile-1)*tile_dim
+            idx = row + (itile-1)*p
             idim = 1
             if idx <= s_size
                 while idim <= 7
@@ -219,7 +222,9 @@ function gpu_vpm3!(s, t, num_cols, kernel)
         while i <= bodies_per_col
             isource = i + bodies_per_col*(col-1)
             if isource <= s_size
-                out = gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
+                if itarget <= t_size
+                    out .= gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
+                end
 
                 # Sum up influences for each source in a tile
                 idim = 1
@@ -237,14 +242,16 @@ function gpu_vpm3!(s, t, num_cols, kernel)
     # Sum up accelerations for each target/thread
     # Each target will be accessed by q no. of threads
     idx = 1
-    while idx <= 3
-        @inbounds CUDA.@atomic t[9+idx, itarget] += UJ[idx]
-        idx += 1
-    end
-    idx = 4
-    while idx <= 12
-        @inbounds CUDA.@atomic t[12+idx, itarget] += UJ[idx]
-        idx += 1
+    if itarget <= t_size
+        while idx <= 3
+            @inbounds CUDA.@atomic t[9+idx, itarget] += UJ[idx]
+            idx += 1
+        end
+        idx = 4
+        while idx <= 12
+            @inbounds CUDA.@atomic t[12+idx, itarget] += UJ[idx]
+            idx += 1
+        end
     end
     return
 end
@@ -540,10 +547,9 @@ end
 
 function benchmark3_gpu!(s, t, p, q; t_padding=0)
     s_d = CuArray(view(s, 1:7, :))
-    t_d = CuArray{eltype(t)}(undef, size(t, 1), size(t, 2)+t_padding)
-    copyto!(t_d, t)
+    t_d = CuArray(view(t, 1:24, :))
 
-    t_size = size(t_d, 2)
+    t_size = size(t_d, 2)+t_padding
     kernel = gpu_g_dgdr
 
     # Num of threads in a tile should always be 
@@ -552,10 +558,10 @@ function benchmark3_gpu!(s, t, p, q; t_padding=0)
     threads::Int32 = p*q
     blocks::Int32 = cld(t_size, p)
     shmem = sizeof(eltype(s)) * 7 * p  # XYZ + Γ123 + σ = 7 variables
-    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm3!(s_d, t_d, q, kernel)
+    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm3!(s_d, t_d, p, q, kernel)
 
-    view(t, 10:12, :) .= Array(view(t_d, 10:12, 1:size(t, 2)))
-    view(t, 16:24, :) .= Array(view(t_d, 16:24, 1:size(t, 2)))
+    view(t, 10:12, :) .= Array(view(t_d, 10:12, :))
+    view(t, 16:24, :) .= Array(view(t_d, 16:24, :))
 end
 
 function benchmark4_gpu!(s, t, p, q)
