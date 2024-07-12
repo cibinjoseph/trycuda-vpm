@@ -617,10 +617,10 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
         p, q = get_launch_config(nt; T=T)
     end
     if run_option == 1 || run_option == 2
-    println("No. of sources: $ns")
-    println("No. of targets: $nt")
-    println("Tile size, p: $p")
-    println("Cols per tile, q: $q")
+        println("No. of sources: $ns")
+        println("No. of targets: $nt")
+        println("Tile size, p: $p")
+        println("Cols per tile, q: $q")
 
         check_launch(nt, p, q; T=T)
 
@@ -629,9 +629,9 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
             println("CPU Run")
             cpu_vpm!(src, trg)
             println("GPU Run")
-            # benchmark3_gpu!(src2, trg2, p, q)
+            benchmark3_gpu!(src2, trg2, p, q)
             # benchmark4_gpu!(src2, trg2, p, q)
-            benchmark5_gpu!(src2, trg2, p, q)
+            # benchmark5_gpu!(src2, trg2, p, q)
             diff = abs.(trg .- trg2)
             err_norm = sqrt(sum(abs2, diff)/length(diff))
             diff_bool = diff .< eps(T)
@@ -657,8 +657,8 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
             end
         else
             println("Running profiler...")
-            # CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q)
-            CUDA.@profile external=true benchmark4_gpu!(src2, trg2, p, q)
+            CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q)
+            # CUDA.@profile external=true benchmark4_gpu!(src2, trg2, p, q)
             # CUDA.@profile external=true benchmark5_gpu!(src2, trg2, p, q)
         end
     else
@@ -666,8 +666,8 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
 
         src, trg, src2, trg2 = get_inputs(ns, nfields)
         t_cpu = @benchmark cpu_vpm!($src, $trg)
-        # t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q)
-        t_gpu = @benchmark benchmark4_gpu!($src2, $trg2, $p, $q)
+        t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q)
+        # t_gpu = @benchmark benchmark4_gpu!($src2, $trg2, $p, $q)
         # t_gpu = @benchmark benchmark5_gpu!($src2, $trg2, $p, $q)
         speedup = median(t_cpu.times)/median(t_gpu.times)
         println("$ns $speedup")
@@ -676,7 +676,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
 end
 
 function get_launch_config(nt; T=Float32, p_max=256)
-    divs_n = divisors(nt)
+    divs_n = sort(divisors(nt))
     p = 1
     q = 1
     ip = 1
@@ -725,4 +725,5 @@ end
 # main(1; ns=8739, nt=3884, p=1, T=Float64, debug=true)
 # main(1; ns=33, p=11, T=Float64)
 # main(1; ns=130, p=26, q=2, T=Float64)
-main(1; ns=8, p=4, q=2, T=Float64, debug=true)
+# main(1; ns=8, p=4, q=2, T=Float64, debug=true)
+main(3; ns=9800, T=Float64, debug=true)
