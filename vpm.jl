@@ -538,21 +538,24 @@ function benchmark1_gpu!(s, t)
     view(t, 16:24, :) .= Array(t_d[16:24, :])
 end
 
-function benchmark3_gpu!(s, t, p, q)
+function benchmark3_gpu!(s, t, p, q; t_padding=0)
     s_d = CuArray(view(s, 1:7, :))
-    t_d = CuArray(t)
+    t_d = CuArray{eltype(t)}(undef, size(t, 1), size(t, 2)+t_padding)
+    copyto!(t_d, t)
+
+    t_size = size(t_d, 2)
     kernel = gpu_g_dgdr
 
     # Num of threads in a tile should always be 
     # less than number of threads in a block (1024)
     # or limited by memory size
     threads::Int32 = p*q
-    blocks::Int32 = cld(size(t, 2), p)
+    blocks::Int32 = cld(t_size, p)
     shmem = sizeof(eltype(s)) * 7 * p  # XYZ + Γ123 + σ = 7 variables
     @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm3!(s_d, t_d, q, kernel)
 
-    view(t, 10:12, :) .= Array(t_d[10:12, :])
-    view(t, 16:24, :) .= Array(t_d[16:24, :])
+    view(t, 10:12, :) .= Array(view(t_d, 10:12, 1:size(t, 2)))
+    view(t, 16:24, :) .= Array(view(t_d, 16:24, 1:size(t, 2)))
 end
 
 function benchmark4_gpu!(s, t, p, q)
@@ -611,10 +614,16 @@ function check_launch(n, p, q; T=Float32, throw_error=true)
     return isgood
 end
 
-function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
+function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false, padding=true)
     nt = nt==0 ? ns : nt
+    t_padding = 0
+    # Pad target array to nearest multiple of 10 for efficient p, q launch configuration
+    if padding && mod(nt, 10) > 0
+        t_padding =  nt + (10 - mod(nt, 10))
+    end
     if p == 0
-        p, q = get_launch_config(nt; T=T)
+        p, q = get_launch_config(nt+t_padding; T=T)
+        # @show p, q
     end
     if run_option == 1 || run_option == 2
         println("No. of sources: $ns")
@@ -622,14 +631,14 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
         println("Tile size, p: $p")
         println("Cols per tile, q: $q")
 
-        check_launch(nt, p, q; T=T)
+        check_launch(nt+t_padding, p, q; T=T)
 
         src, trg, src2, trg2 = get_inputs(ns, nfields; T=T, nt=nt)
         if run_option == 1
             println("CPU Run")
             cpu_vpm!(src, trg)
             println("GPU Run")
-            benchmark3_gpu!(src2, trg2, p, q)
+            benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
             # benchmark4_gpu!(src2, trg2, p, q)
             # benchmark5_gpu!(src2, trg2, p, q)
             diff = abs.(trg .- trg2)
@@ -657,16 +666,16 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false)
             end
         else
             println("Running profiler...")
-            CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q)
+            CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
             # CUDA.@profile external=true benchmark4_gpu!(src2, trg2, p, q)
             # CUDA.@profile external=true benchmark5_gpu!(src2, trg2, p, q)
         end
     else
-        check_launch(nt, p, q)
+        check_launch(nt+t_padding, p, q)
 
         src, trg, src2, trg2 = get_inputs(ns, nfields)
         t_cpu = @benchmark cpu_vpm!($src, $trg)
-        t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q)
+        t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
         # t_gpu = @benchmark benchmark4_gpu!($src2, $trg2, $p, $q)
         # t_gpu = @benchmark benchmark5_gpu!($src2, $trg2, $p, $q)
         speedup = median(t_cpu.times)/median(t_gpu.times)
@@ -726,4 +735,7 @@ end
 # main(1; ns=33, p=11, T=Float64)
 # main(1; ns=130, p=26, q=2, T=Float64)
 # main(1; ns=8, p=4, q=2, T=Float64, debug=true)
-main(3; ns=9800, T=Float64, debug=true)
+# main(3, ns=1459; T=Float64, debug=true)
+# main(3, ns=1460; T=Float64, debug=true)
+# main(3, ns=1579; T=Float64, debug=true)
+# main(3, ns=1480; T=Float64, debug=true)
