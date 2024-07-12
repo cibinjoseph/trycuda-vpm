@@ -177,7 +177,6 @@ function gpu_vpm3!(s, t, p, num_cols, kernel)
     col = floor(Int32, (ithread-1)/p) + 1
 
     itarget::Int32 = row + (blockIdx().x-1)*p
-    txyz = @MVector zeros(eltype(t), 3)
     if itarget <= t_size
         @inbounds tx = t[1, itarget]
         @inbounds ty = t[2, itarget]
