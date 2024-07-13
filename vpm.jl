@@ -605,8 +605,10 @@ function benchmark5_gpu!(s, t, p, q)
     view(t, 16:24, :) .= Array(t_d[16:24, :])
 end
 
-function check_launch(n, p, q; T=Float32, throw_error=true)
-    max_threads_per_block = T==Float32 ? 768 : 256
+function check_launch(n, p, q; T=Float32, throw_error=true, max_threads_per_block=0)
+    if max_threads_per_block == 0
+        max_threads_per_block = T==Float32 ? 768 : 512
+    end
 
     isgood = true
 
@@ -619,15 +621,15 @@ function check_launch(n, p, q; T=Float32, throw_error=true)
     return isgood
 end
 
-function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false, padding=true)
+function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false, padding=true, max_threads_per_block=512)
     nt = nt==0 ? ns : nt
     t_padding = 0
     # Pad target array to nearest multiple of 10 for efficient p, q launch configuration
     if padding && mod(nt, 10) > 0
-        t_padding =  nt + (10 - mod(nt, 10))
+        t_padding =  10 - mod(nt, 10)
     end
     if p == 0
-        p, q = get_launch_config(nt+t_padding; T=T)
+        p, q = get_launch_config(nt+t_padding; T=T, max_threads_per_block=max_threads_per_block)
         # @show p, q
     end
     if run_option == 1 || run_option == 2
@@ -636,7 +638,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false, paddin
         println("Tile size, p: $p")
         println("Cols per tile, q: $q")
 
-        check_launch(nt+t_padding, p, q; T=T)
+        check_launch(nt+t_padding, p, q; T=T, max_threads_per_block=max_threads_per_block)
 
         src, trg, src2, trg2 = get_inputs(ns, nfields; T=T, nt=nt)
         if run_option == 1
@@ -676,7 +678,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false, paddin
             # CUDA.@profile external=true benchmark5_gpu!(src2, trg2, p, q)
         end
     else
-        check_launch(nt+t_padding, p, q)
+        check_launch(nt+t_padding, p, q, max_threads_per_block=max_threads_per_block)
 
         src, trg, src2, trg2 = get_inputs(ns, nfields)
         t_cpu = @benchmark cpu_vpm!($src, $trg)
@@ -689,7 +691,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false, paddin
     return
 end
 
-function get_launch_config(nt; T=Float32, p_max=256)
+function get_launch_config(nt; T=Float32, p_max=512, max_threads_per_block=512)
     divs_n = sort(divisors(nt))
     p = 1
     q = 1
@@ -712,7 +714,7 @@ function get_launch_config(nt; T=Float32, p_max=256)
         divs_p = divs_n
         for i in 1:length(divs_n)
             for j in 1:length(divs_n)
-                isgood = check_launch(nt, divs_n[i], divs_p[j]; T=T, throw_error=false)
+                isgood = check_launch(nt, divs_n[i], divs_p[j]; T=T, throw_error=false, max_threads_per_block=max_threads_per_block)
                 if isgood && (divs_n[i] <= p_max)
                     # Check if this is the max achievable ij value
                     # in the p, q choice matrix
