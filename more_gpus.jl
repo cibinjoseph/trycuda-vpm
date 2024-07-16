@@ -15,6 +15,27 @@ using Random
     return
 end
 
+# Function to demonstrate parallelization when there are multiple leaves and gpus
+function direct(nleaves, ngpus)
+    ileaf = 1
+    while ileaf <= nleaves
+        nleaves_remaining = nleaves-ileaf+1 
+        # Perform computations on GPU
+        ileaf_gpu = ileaf
+        for ig in min(ngpus, nleaves_remaining):-1:1
+            println("GPU $(ig-1) computes leaf $ileaf_gpu")
+            ileaf_gpu += 1
+        end
+
+        # Copy results back to CPU
+        ileaf_gpu = ileaf
+        for ig in min(ngpus, nleaves_remaining):-1:1
+            println("GPU $(ig-1) obtains leaf $ileaf_gpu")
+            ileaf_gpu += 1
+        end
+        ileaf = ileaf_gpu
+    end
+end
 
 n = 2^13
 T = Float64
