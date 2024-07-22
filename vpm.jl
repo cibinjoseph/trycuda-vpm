@@ -529,6 +529,98 @@ function gpu_vpm5!(s, t, num_cols, kernel)
     return
 end
 
+# Each thread handles a single target and uses local GPU memory
+# Sources divided into multiple columns and influence is computed by multiple threads
+# More sources into shared memory
+function gpu_vpm6!(s, t, p, num_cols, kernel)
+    t_size::Int32 = size(t, 2)
+    s_size::Int32 = size(s, 2)
+
+    ithread::Int32 = threadIdx().x
+
+    # Row and column indices of threads in a block
+    row = (ithread-1) % p + 1
+    col = floor(Int32, (ithread-1)/p) + 1
+
+    itarget::Int32 = row + (blockIdx().x-1)*p
+    if itarget <= t_size
+        @inbounds tx = t[1, itarget]
+        @inbounds ty = t[2, itarget]
+        @inbounds tz = t[3, itarget]
+    end
+
+    n_tiles::Int32 = CUDA.ceil(Int32, s_size / (p*num_cols))
+    bodies_per_col::Int32 = p
+
+    sh_mem = CuDynamicSharedArray(eltype(t), (7, p*num_cols))
+
+    # Variable initialization
+    UJ = @MVector zeros(eltype(t), 12)
+    out = @MVector zeros(eltype(t), 12)
+    idim::Int32 = 0
+    idx::Int32 = 0
+    i::Int32 = 0
+    isource::Int32 = 0
+
+    itile::Int32 = 1
+    while itile <= n_tiles
+        @cushow itile
+        # Each thread will copy source coordinates corresponding to its index into shared memory. This will be done for each tile.
+        idx = ithread + (itile-1)*p*num_cols
+        idim = 1
+        if idx <= s_size
+            while idim <= 7
+                @inbounds sh_mem[idim, idx] = s[idim, idx]
+                idim += 1
+            end
+        else
+            while idim <= 7
+                @inbounds sh_mem[idim, row] = zero(eltype(s))
+                idim += 1
+            end
+        end
+        sync_threads()
+
+        # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
+        i = 1
+        while i <= bodies_per_col
+            isource = i + bodies_per_col*(col-1)
+            if isource <= s_size
+                if itarget <= t_size
+                    out .= gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
+                end
+
+                # Sum up influences for each source in a tile
+                idim = 1
+                while idim <= 12
+                    @inbounds UJ[idim] += out[idim]
+                    idim += 1
+                end
+            end
+            i += 1
+        end
+        itile += 1
+        sync_threads()
+    end
+
+    # Sum up accelerations for each target/thread
+    # Each target will be accessed by q no. of threads
+    idx = 1
+    if itarget <= t_size
+        while idx <= 3
+            @inbounds CUDA.@atomic t[9+idx, itarget] += UJ[idx]
+            idx += 1
+        end
+        idx = 4
+        while idx <= 12
+            @inbounds CUDA.@atomic t[12+idx, itarget] += UJ[idx]
+            idx += 1
+        end
+    end
+    return
+end
+
+
 function benchmark1_gpu!(s, t)
     s_d = CuArray(view(s, 1:7, :))
     t_d = CuArray(t)
@@ -605,11 +697,27 @@ function benchmark5_gpu!(s, t, p, q)
     view(t, 16:24, :) .= Array(t_d[16:24, :])
 end
 
-function check_launch(n, p, q; T=Float32, throw_error=true, max_threads_per_block=0)
-    if max_threads_per_block == 0
-        max_threads_per_block = T==Float32 ? 768 : 512
-    end
+function benchmark6_gpu!(s, t, p, q; t_padding=0)
+    s_d = CuArray(view(s, 1:7, :))
+    t_d = CuArray(view(t, 1:24, :))
 
+    t_size = size(t_d, 2)+t_padding
+    kernel = gpu_g_dgdr
+
+    # Num of threads in a tile should always be 
+    # less than number of threads in a block (1024)
+    # or limited by memory size
+    threads::Int32 = p*q
+    blocks::Int32 = cld(t_size, p)
+    shmem = sizeof(eltype(s)) * 7 * p*q  # XYZ + Γ123 + σ = 7 variables
+    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm6!(s_d, t_d, p, q, kernel)
+
+    view(t, 10:12, :) .= Array(view(t_d, 10:12, :))
+    view(t, 16:24, :) .= Array(view(t_d, 16:24, :))
+end
+
+
+function check_launch(n, p, q; throw_error=true, max_threads_per_block=512)
     isgood = true
 
     if p > n; isgood = false; throw_error && error("p must be less than or equal to n"); end
@@ -621,33 +729,37 @@ function check_launch(n, p, q; T=Float32, throw_error=true, max_threads_per_bloc
     return isgood
 end
 
-function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false, padding=true, max_threads_per_block=512)
+function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max_threads_per_block=512)
+    T = Float64
+
     nt = nt==0 ? ns : nt
+
     t_padding = 0
     # Pad target array to nearest multiple of 10 for efficient p, q launch configuration
     if padding && mod(nt, 10) > 0
         t_padding =  10 - mod(nt, 10)
     end
     if p == 0
-        p, q = get_launch_config(nt+t_padding; T=T, max_threads_per_block=max_threads_per_block)
+        p, q = get_launch_config(nt+t_padding; max_threads_per_block=max_threads_per_block)
         # @show p, q
     end
     if run_option == 1 || run_option == 2
         println("No. of sources: $ns")
         println("No. of targets: $nt")
-        println("Tile size, p: $p")
+        println("Tile length, p: $p")
         println("Cols per tile, q: $q")
 
-        check_launch(nt+t_padding, p, q; T=T, max_threads_per_block=max_threads_per_block)
+        check_launch(nt+t_padding, p, q; max_threads_per_block=max_threads_per_block)
 
         src, trg, src2, trg2 = get_inputs(ns, nfields; T=T, nt=nt)
         if run_option == 1
             println("CPU Run")
             cpu_vpm!(src, trg)
             println("GPU Run")
-            benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            # benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
             # benchmark4_gpu!(src2, trg2, p, q)
             # benchmark5_gpu!(src2, trg2, p, q)
+            benchmark6_gpu!(src2, trg2, p, q)
             diff = abs.(trg .- trg2)
             err_norm = sqrt(sum(abs2, diff)/length(diff))
             diff_bool = diff .< eps(T)
@@ -691,7 +803,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, T=Float32, debug=false, paddin
     return
 end
 
-function get_launch_config(nt; T=Float32, p_max=512, max_threads_per_block=512)
+function get_launch_config(nt; p_max=512, max_threads_per_block=512)
     divs_n = sort(divisors(nt))
     p = 1
     q = 1
@@ -714,7 +826,7 @@ function get_launch_config(nt; T=Float32, p_max=512, max_threads_per_block=512)
         divs_p = divs_n
         for i in 1:length(divs_n)
             for j in 1:length(divs_n)
-                isgood = check_launch(nt, divs_n[i], divs_p[j]; T=T, throw_error=false, max_threads_per_block=max_threads_per_block)
+                isgood = check_launch(nt, divs_n[i], divs_p[j]; throw_error=false, max_threads_per_block=max_threads_per_block)
                 if isgood && (divs_n[i] <= p_max)
                     # Check if this is the max achievable ij value
                     # in the p, q choice matrix
@@ -736,13 +848,14 @@ end
 # for i in 7:17
 #     main(3; ns=2^i, T=Float32)
 # end
-# main(1; ns=2, p=256, T=Float32, debug=true)
+# main(1; ns=2, debug=true)
 # main(3; ns=2^9, nt=2^12, T=Float32, debug=true)
-# main(1; ns=8739, nt=3884, p=1, T=Float64, debug=true)
+# main(1; ns=8739, nt=3884, debug=true)
 # main(1; ns=33, p=11, T=Float64)
 # main(1; ns=130, p=26, q=2, T=Float64)
-# main(1; ns=8, p=4, q=2, T=Float64, debug=true)
-# main(3, ns=1459; T=Float64, debug=true)
-# main(3, ns=1460; T=Float64, debug=true)
-# main(3, ns=1579; T=Float64, debug=true)
-# main(3, ns=1480; T=Float64, debug=true)
+# main(1; ns=8, p=4, q=2, padding=false, debug=true)
+# main(3, ns=1459; debug=true)
+# main(3, ns=1460; debug=true)
+# main(3, ns=1579; debug=true)
+# main(3, ns=1480; debug=true)
+main(1, ns=3, nt=2, p=2, q=1, padding=false)
