@@ -741,7 +741,6 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
     end
     if p == 0
         p, q = get_launch_config(nt+t_padding; max_threads_per_block=max_threads_per_block)
-        # @show p, q
     end
     if run_option == 1 || run_option == 2
         println("No. of sources: $ns")
@@ -805,7 +804,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
     return
 end
 
-function get_launch_config(nt; p_max=512, max_threads_per_block=512)
+function get_launch_config(nt; p_max=384, max_threads_per_block=384)
     divs_n = sort(divisors(nt))
     p = 1
     q = 1
@@ -860,4 +859,4 @@ end
 # main(3, ns=1460; debug=true)
 # main(3, ns=1579; debug=true)
 # main(3, ns=1480; debug=true)
-main(2; ns=2^9)
+main(2; ns=2^10)
