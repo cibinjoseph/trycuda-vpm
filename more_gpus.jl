@@ -46,11 +46,11 @@ function work!(mat_cpu)
     println("$ndevices GPU found")
 
     if ndevices == 1
-        mat_gpu = CuArray(mat_cpu)
-        threads = min(n, 1024)
-        blocks = cld(n, threads)
-        @cuda threads=threads blocks=blocks f!(mat_gpu)
-        mat_cpu .= Array(mat_gpu)
+        # mat_gpu = CuArray(mat_cpu)
+        # threads = min(n, 1024)
+        # blocks = cld(n, threads)
+        # @cuda threads=threads blocks=blocks f!(mat_gpu)
+        # mat_cpu .= Array(mat_gpu)
 
     elseif ndevices >= 2
         # Launch kernels on gpu/s
@@ -89,5 +89,40 @@ function work!(mat_cpu)
     end
 end
 
-work!(mat_cpu)
-CUDA.@profile work!(mat_cpu)
+function kernel!(a)
+    j = threadIdx().x
+    a[j] = 1.0
+    return
+end
+
+function run_kernel!(a)
+    idx = [1:10, 25:30]
+
+    ndevices = length(CUDA.devices())
+
+    a_gpu_list = Vector{CuArray{Float64, 1}}(undef, ndevices)
+
+    # Launch kernels on multiple gpus
+    for idev in 1:ndevices
+        CUDA.device!(idev-1)
+        a_gpu = CuArray(view(a, idx[idev]))
+        n = length(idx[idev])
+        @cuda threads=n kernel!(a_gpu)
+        a_gpu_list[idev] = a_gpu
+        @show size(a_gpu)
+    end
+
+    # Copy results back from gpus
+    for idev in 1:ndevices
+        CUDA.device!(idev-1)
+        a[idx[idev]] .= Array(a_gpu_list[idev])
+        @show size(a_gpu_list[idev])
+    end
+
+end
+
+# work!(mat_cpu)
+# CUDA.@profile work!(mat_cpu)
+
+a = zeros(30)
+run_kernel!(a)
