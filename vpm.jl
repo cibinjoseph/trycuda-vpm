@@ -564,21 +564,21 @@ function gpu_vpm6!(s, t, p, num_cols, kernel)
 
     itile::Int32 = 1
     while itile <= n_tiles
-        @cushow itile
         # Each thread will copy source coordinates corresponding to its index into shared memory. This will be done for each tile.
         idx = ithread + (itile-1)*p*num_cols
         idim = 1
         if idx <= s_size
             while idim <= 7
-                @inbounds sh_mem[idim, idx] = s[idim, idx]
+                @inbounds sh_mem[idim, ithread] = s[idim, idx]
                 idim += 1
             end
         else
             while idim <= 7
-                @inbounds sh_mem[idim, row] = zero(eltype(s))
+                @inbounds sh_mem[idim, ithread] = zero(eltype(s))
                 idim += 1
             end
         end
+        blockIdx().x == 1 && @cushow itile, idx, sh_mem[1, 1], sh_mem[1, 2]
         sync_threads()
 
         # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
@@ -594,6 +594,7 @@ function gpu_vpm6!(s, t, p, num_cols, kernel)
                 idim = 1
                 while idim <= 12
                     @inbounds UJ[idim] += out[idim]
+
                     idim += 1
                 end
             end
@@ -759,6 +760,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
             # benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
             # benchmark4_gpu!(src2, trg2, p, q)
             # benchmark5_gpu!(src2, trg2, p, q)
+            display(src[1:3, :])
             benchmark6_gpu!(src2, trg2, p, q)
             diff = abs.(trg .- trg2)
             err_norm = sqrt(sum(abs2, diff)/length(diff))
@@ -851,11 +853,11 @@ end
 # main(1; ns=2, debug=true)
 # main(3; ns=2^9, nt=2^12, T=Float32, debug=true)
 # main(1; ns=8739, nt=3884, debug=true)
-# main(1; ns=33, p=11, T=Float64)
+main(1; ns=33, p=11)
 # main(1; ns=130, p=26, q=2, T=Float64)
 # main(1; ns=8, p=4, q=2, padding=false, debug=true)
 # main(3, ns=1459; debug=true)
 # main(3, ns=1460; debug=true)
 # main(3, ns=1579; debug=true)
 # main(3, ns=1480; debug=true)
-main(1, ns=3, nt=2, p=2, q=1, padding=false)
+# main(1, ns=3, nt=2, p=2, q=1, padding=false, debug=true)
