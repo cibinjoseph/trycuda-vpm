@@ -173,8 +173,8 @@ function gpu_vpm3!(s, t, p, num_cols, kernel)
     ithread::Int32 = threadIdx().x
 
     # Row and column indices of threads in a block
-    row = (ithread-1) % p + 1
-    col = floor(Int32, (ithread-1)/p) + 1
+    row::Int32 = (ithread-1) % p + 1
+    col::Int32 = floor(Int32, (ithread-1)/p) + 1
 
     itarget::Int32 = row + (blockIdx().x-1)*p
     if itarget <= t_size
@@ -264,8 +264,8 @@ function gpu_vpm4!(s, t, num_cols, gb_mem, kernel)
     p::Int32 = t_size/gridDim().x
 
     # Row and column indices of threads in a block
-    row = (ithread-1) % p + 1
-    col = floor(Int32, (ithread-1)/p) + 1
+    row::Int32 = (ithread-1) % p + 1
+    col::Int32 = floor(Int32, (ithread-1)/p) + 1
 
     itarget::Int32 = row + (blockIdx().x-1)*p
     @inbounds tx = t[1, itarget]
@@ -401,8 +401,8 @@ function gpu_vpm5!(s, t, num_cols, kernel)
     p::Int32 = t_size/gridDim().x
 
     # Row and column indices of threads in a block
-    row = (ithread-1) % p + 1
-    col = floor(Int32, (ithread-1)/p) + 1
+    row::Int32 = (ithread-1) % p + 1
+    col::Int32 = floor(Int32, (ithread-1)/p) + 1
 
     itarget::Int32 = row + (blockIdx().x-1)*p
     @inbounds tx = t[1, itarget]
@@ -539,8 +539,8 @@ function gpu_vpm6!(s, t, p, num_cols, kernel)
     ithread::Int32 = threadIdx().x
 
     # Row and column indices of threads in a block
-    row = (ithread-1) % p + 1
-    col = floor(Int32, (ithread-1)/p) + 1
+    row::Int32 = (ithread-1) % p + 1
+    col::Int32 = floor(Int32, (ithread-1)/p) + 1
 
     itarget::Int32 = row + (blockIdx().x-1)*p
     if itarget <= t_size
@@ -640,7 +640,7 @@ function benchmark3_gpu!(s, t, p, q; t_padding=0)
     s_d = CuArray(view(s, 1:7, :))
     t_d = CuArray(view(t, 1:24, :))
 
-    t_size = size(t_d, 2)+t_padding
+    t_size = size(t, 2)+t_padding
     kernel = gpu_g_dgdr
 
     # Num of threads in a tile should always be 
@@ -701,7 +701,7 @@ function benchmark6_gpu!(s, t, p, q; t_padding=0)
     s_d = CuArray(view(s, 1:7, :))
     t_d = CuArray(view(t, 1:24, :))
 
-    t_size = size(t_d, 2)+t_padding
+    t_size = size(t, 2)+t_padding
     kernel = gpu_g_dgdr
 
     # Num of threads in a tile should always be 
@@ -717,7 +717,7 @@ function benchmark6_gpu!(s, t, p, q; t_padding=0)
 end
 
 
-function check_launch(n, p, q; throw_error=true, max_threads_per_block=512)
+function check_launch(n, p, q; throw_error=true, max_threads_per_block=384)
     isgood = true
 
     if p > n; isgood = false; throw_error && error("p must be less than or equal to n"); end
@@ -729,7 +729,7 @@ function check_launch(n, p, q; throw_error=true, max_threads_per_block=512)
     return isgood
 end
 
-function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max_threads_per_block=512)
+function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max_threads_per_block=384)
     T = Float64
 
     nt = nt==0 ? ns : nt
@@ -785,10 +785,10 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
             end
         else
             println("Running profiler...")
-            # CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
             # CUDA.@profile external=true benchmark4_gpu!(src2, trg2, p, q)
             # CUDA.@profile external=true benchmark5_gpu!(src2, trg2, p, q)
-            CUDA.@profile external=true benchmark6_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            # CUDA.@profile external=true benchmark6_gpu!(src2, trg2, p, q; t_padding=t_padding)
         end
     else
         check_launch(nt+t_padding, p, q, max_threads_per_block=max_threads_per_block)
@@ -847,9 +847,9 @@ function get_launch_config(nt; p_max=512, max_threads_per_block=512)
 end
 
 # Run_option - # [1]test [2]profile [3]benchmark
-for i in 7:17
-    main(3; ns=2^i)
-end
+# for i in 5:17
+#     main(3; ns=2^i)
+# end
 # main(1; ns=2, debug=true)
 # main(3; ns=2^9, nt=2^12, debug=true)
 # main(1; ns=8739, nt=3884, debug=true)
@@ -860,4 +860,4 @@ end
 # main(3, ns=1460; debug=true)
 # main(3, ns=1579; debug=true)
 # main(3, ns=1480; debug=true)
-# main(1, ns=3, nt=2, p=2, q=1, padding=false, debug=true)
+main(2; ns=2^9)
