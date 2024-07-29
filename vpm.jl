@@ -1,4 +1,5 @@
 using CUDA
+using CUDA: i32
 using BenchmarkTools
 using Random
 using StaticArrays
@@ -110,9 +111,9 @@ end
         crss3 = -T(const4) / r3 * ( dX1*gam2 - dX2*gam1 )
 
         # U = ∑g_σ(x-xp) * K(x-xp) × Γp
-        UJ[1] = g_sgm * crss1
-        UJ[2] = g_sgm * crss2
-        UJ[3] = g_sgm * crss3
+        @inbounds UJ[1] = g_sgm * crss1
+        @inbounds UJ[2] = g_sgm * crss2
+        @inbounds UJ[3] = g_sgm * crss3
 
         # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
         # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
@@ -121,17 +122,17 @@ end
         # Adds the Kronecker delta term
         aux2 = -T(const4) * g_sgm / r3
         # j=1
-        UJ[4] = aux * crss1 * dX1
-        UJ[5] = aux * crss2 * dX1 - aux2 * gam3
-        UJ[6] = aux * crss3 * dX1 + aux2 * gam2
+        @inbounds UJ[4] = aux * crss1 * dX1
+        @inbounds UJ[5] = aux * crss2 * dX1 - aux2 * gam3
+        @inbounds UJ[6] = aux * crss3 * dX1 + aux2 * gam2
         # j=2
-        UJ[7] = aux * crss1 * dX2 + aux2 * gam3
-        UJ[8] = aux * crss2 * dX2
-        UJ[9] = aux * crss3 * dX2 - aux2 * gam1
+        @inbounds UJ[7] = aux * crss1 * dX2 + aux2 * gam3
+        @inbounds UJ[8] = aux * crss2 * dX2
+        @inbounds UJ[9] = aux * crss3 * dX2 - aux2 * gam1
         # j=3
-        UJ[10] = aux * crss1 * dX3 - aux2 * gam2
-        UJ[11] = aux * crss2 * dX3 + aux2 * gam1
-        UJ[12] = aux * crss3 * dX3
+        @inbounds UJ[10] = aux * crss1 * dX3 - aux2 * gam2
+        @inbounds UJ[11] = aux * crss2 * dX3 + aux2 * gam1
+        @inbounds UJ[12] = aux * crss3 * dX3
     end
 
     return UJ
@@ -192,19 +193,18 @@ function gpu_vpm3!(s, t, p, num_cols, kernel)
     UJ = @MVector zeros(eltype(t), 12)
     out = @MVector zeros(eltype(t), 12)
     idim::Int32 = 0
-    idx::Int32 = 0
-    i::Int32 = 0
     isource::Int32 = 0
+    i::Int32 = 0
 
     itile::Int32 = 1
     while itile <= n_tiles
         # Each thread will copy source coordinates corresponding to its index into shared memory. This will be done for each tile.
         if (col == 1)
-            idx = row + (itile-1)*p
+            isource = row + (itile-1)*p
             idim = 1
-            if idx <= s_size
+            if isource <= s_size
                 while idim <= 7
-                    @inbounds sh_mem[idim, row] = s[idim, idx]
+                    @inbounds sh_mem[idim, row] = s[idim, isource]
                     idim += 1
                 end
             else
@@ -240,16 +240,16 @@ function gpu_vpm3!(s, t, p, num_cols, kernel)
 
     # Sum up accelerations for each target/thread
     # Each target will be accessed by q no. of threads
-    idx = 1
     if itarget <= t_size
-        while idx <= 3
-            @inbounds CUDA.@atomic t[9+idx, itarget] += UJ[idx]
-            idx += 1
+        idim = 1
+        while idim <= 3
+            @inbounds CUDA.@atomic t[9+idim, itarget] += UJ[idim]
+            idim += 1
         end
-        idx = 4
-        while idx <= 12
-            @inbounds CUDA.@atomic t[12+idx, itarget] += UJ[idx]
-            idx += 1
+        idim = 4
+        while idim <= 12
+            @inbounds CUDA.@atomic t[12+idim, itarget] += UJ[idim]
+            idim += 1
         end
     end
     return
@@ -649,10 +649,10 @@ function benchmark3_gpu!(s, t, p, q; t_padding=0)
     threads::Int32 = p*q
     blocks::Int32 = cld(t_size, p)
     shmem = sizeof(eltype(s)) * 7 * p  # XYZ + Γ123 + σ = 7 variables
-    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm3!(s_d, t_d, p, q, kernel)
+    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm3!(s_d, t_d, Int32(p), Int32(q), kernel)
 
-    view(t, 10:12, :) .= Array(view(t_d, 10:12, :))
-    view(t, 16:24, :) .= Array(view(t_d, 16:24, :))
+    t[10:12, :] .= Array(view(t_d, 10:12, :))
+    t[16:24, :] .= Array(view(t_d, 16:24, :))
 end
 
 function benchmark4_gpu!(s, t, p, q)
@@ -755,10 +755,10 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
             println("CPU Run")
             cpu_vpm!(src, trg)
             println("GPU Run")
-            # benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
             # benchmark4_gpu!(src2, trg2, p, q)
             # benchmark5_gpu!(src2, trg2, p, q)
-            benchmark6_gpu!(src2, trg2, p, q)
+            # benchmark6_gpu!(src2, trg2, p, q)
             diff = abs.(trg .- trg2)
             err_norm = sqrt(sum(abs2, diff)/length(diff))
             diff_bool = diff .< eps(T)
@@ -794,10 +794,10 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
 
         src, trg, src2, trg2 = get_inputs(ns, nfields)
         t_cpu = @benchmark cpu_vpm!($src, $trg)
-        # t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
+        t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
         # t_gpu = @benchmark benchmark4_gpu!($src2, $trg2, $p, $q)
         # t_gpu = @benchmark benchmark5_gpu!($src2, $trg2, $p, $q)
-        t_gpu = @benchmark benchmark6_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
+        # t_gpu = @benchmark benchmark6_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
         speedup = median(t_cpu.times)/median(t_gpu.times)
         println("$ns $speedup")
     end
@@ -859,4 +859,4 @@ end
 # main(3, ns=1460; debug=true)
 # main(3, ns=1579; debug=true)
 # main(3, ns=1480; debug=true)
-main(2; ns=2^10)
+main(3; ns=2^13)
