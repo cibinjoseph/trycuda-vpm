@@ -756,6 +756,99 @@ function gpu_vpm7!(s, t, p, num_cols, kernel)
     return
 end
 
+# Selective interaction kernel
+# Each thread handles a single target and uses local GPU memory
+# Sources divided into multiple columns and influence is computed by multiple threads
+function gpu_vpm8!(pfield, tidx_min, tidx_max, s_indices,
+        tidx_offset, sidx_offset, p, num_cols, kernel)
+
+    t_size::Int32 = tidx_max - tidx_max + 1
+    s_size::Int32 = length(s_indices)
+
+    ithread::Int32 = threadIdx().x
+
+    # Row and column indices of threads in a block
+    row::Int32 = (ithread-1i32) % p + 1i32
+    col::Int32 = floor(Int32, (ithread-1i32)/p) + 1i32
+
+    itarget::Int32 = row + (blockIdx().x-1i32)*p
+    if itarget <= t_size
+        @inbounds tx = pfield[1, tidx_min+itarget-1]
+        @inbounds ty = pfield[2, tidx_min+itarget-1]
+        @inbounds tz = pfield[3, tidx_min+itarget-1]
+    end
+
+    n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
+    bodies_per_col::Int32 = CUDA.ceil(Int32, p / num_cols)
+
+    sh_mem = CuDynamicSharedArray(eltype(pfield), (7, p))
+
+    # Variable initialization
+    UJ = @MVector zeros(eltype(pfield), 12)
+    out = @MVector zeros(eltype(pfield), 12)
+    idim::Int32 = 0
+    isource::Int32 = 0
+    i::Int32 = 0
+
+    itile::Int32 = 1
+    while itile <= n_tiles
+        # Each thread will copy source coordinates corresponding to its index into shared memory. This will be done for each tile.
+        if (col == 1i32)
+            isource = row + (itile-1i32)*p
+            idim = 1
+            if isource <= s_size
+                while idim <= 7
+                    @inbounds sh_mem[idim, row] = pfield[idim, s_indices[isource]]
+                    idim += 1
+                end
+            else
+                while idim <= 7
+                    @inbounds sh_mem[idim, row] = zero(eltype(pfield))
+                    idim += 1
+                end
+            end
+        end
+        sync_threads()
+
+        # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
+        i = 1
+        while i <= bodies_per_col
+            isource = i + bodies_per_col*(col-1)
+            if isource <= s_size
+                if itarget >= tidx_min && itarget <= tidx_max
+                    out .= gpu_interaction(tx, ty, tz, sh_mem, s_indices[isource], kernel)
+                end
+
+                # Sum up influences for each source in a tile
+                idim = 1
+                while idim <= 12
+                    @inbounds UJ[idim] += out[idim]
+                    idim += 1
+                end
+            end
+            i += 1
+        end
+        itile += 1
+        sync_threads()
+    end
+
+    # Sum up accelerations for each target/thread
+    # Each target will be accessed by q no. of threads
+    if itarget >= tidx_min && itarget <= tidx_max
+        idim = 1
+        while idim <=3
+            @inbounds CUDA.@atomic pfield[9+idim, tidx_min+itarget-1] += UJ[idim]
+            idim += 1
+        end
+        idim = 4
+        while idim <= 12
+            @inbounds CUDA.@atomic pfield[12+idim, tidx_min+itarget-1] += UJ[idim]
+            idim += 1
+        end
+    end
+    return
+end
+
 
 function benchmark1_gpu!(s, t)
     s_d = CuArray(view(s, 1:7, :))
@@ -871,6 +964,36 @@ function benchmark7_gpu!(s, t, p, q; t_padding=0)
     t[16:24, :] .= Array(view(t_d, 16:24, :))
 end
 
+function prep8_gpu!(s, t)
+    pfield = hcat(t, s)
+    tidx_min = 1
+    tidx_max = size(t, 2)
+    s_indices = size(t, 2) .+ collect(1:size(s, 2))
+    return pfield, tidx_min, tidx_max, s_indices
+end
+
+function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=0)
+    pfield_d = CuArray(view(pfield, 1:24, :))
+    s_indices_d = CuArray(s_indices)
+
+    t_size::Int32 = tidx_max-tidx_max+1+t_padding
+    tidx_offset::Int32 = 0 
+    sidx_offset::Int32 = 0 
+    kernel = gpu_g_dgdr
+
+    # Num of threads in a tile should always be 
+    # less than number of threads in a block (1024)
+    # or limited by memory size
+    threads::Int32 = p*q
+    blocks::Int32 = cld(t_size, p)
+    shmem = sizeof(eltype(pfield)) * 7 * p  # XYZ + Γ123 + σ = 7 variables
+
+    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm8!(pfield_d, tidx_min, tidx_max, s_indices_d, tidx_offset, sidx_offset, Int32(p), Int32(q), kernel)
+
+    pfield[10:12, :] .= Array(view(pfield_d, 10:12, :))
+    pfield[16:24, :] .= Array(view(tfield_d, 16:24, :))
+end
+
 
 function check_launch(n, p, q; throw_error=true, max_threads_per_block=384)
     isgood = true
@@ -910,11 +1033,13 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
             println("CPU Run")
             cpu_vpm!(src, trg)
             println("GPU Run")
-            benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            # benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
             # benchmark4_gpu!(src2, trg2, p, q)
             # benchmark5_gpu!(src2, trg2, p, q)
             # benchmark6_gpu!(src2, trg2, p, q)
             # benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
+            benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=t_padding)
             diff = abs.(trg .- trg2)
             err_norm = sqrt(sum(abs2, diff)/length(diff))
             diff_bool = diff .< eps(T)
@@ -1016,5 +1141,6 @@ end
 # main(3, ns=1460; debug=true)
 # main(3, ns=1579; debug=true)
 # main(3, ns=1480; debug=true)
-main(1; ns=2^10)
-main(3; ns=2^10)
+# main(1; ns=2^10)
+# main(3; ns=2^10)
+main(1; ns=4, padding=false)
