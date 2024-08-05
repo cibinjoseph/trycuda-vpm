@@ -762,7 +762,7 @@ end
 function gpu_vpm8!(pfield, tidx_min, tidx_max, s_indices,
         tidx_offset, sidx_offset, p, num_cols, kernel)
 
-    t_size::Int32 = tidx_max - tidx_max + 1
+    t_size::Int32 = tidx_max - tidx_min + 1
     s_size::Int32 = length(s_indices)
 
     ithread::Int32 = threadIdx().x
@@ -816,7 +816,7 @@ function gpu_vpm8!(pfield, tidx_min, tidx_max, s_indices,
             isource = i + bodies_per_col*(col-1)
             if isource <= s_size
                 if itarget >= tidx_min && itarget <= tidx_max
-                    out .= gpu_interaction(tx, ty, tz, sh_mem, s_indices[isource], kernel)
+                    out .= gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
                 end
 
                 # Sum up influences for each source in a tile
@@ -991,7 +991,7 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=
     @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm8!(pfield_d, tidx_min, tidx_max, s_indices_d, tidx_offset, sidx_offset, Int32(p), Int32(q), kernel)
 
     pfield[10:12, :] .= Array(view(pfield_d, 10:12, :))
-    pfield[16:24, :] .= Array(view(tfield_d, 16:24, :))
+    pfield[16:24, :] .= Array(view(pfield_d, 16:24, :))
 end
 
 
@@ -1033,13 +1033,15 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
             println("CPU Run")
             cpu_vpm!(src, trg)
             println("GPU Run")
-            # benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
             # benchmark4_gpu!(src2, trg2, p, q)
             # benchmark5_gpu!(src2, trg2, p, q)
             # benchmark6_gpu!(src2, trg2, p, q)
             # benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
-            pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-            benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=t_padding)
+            # pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
+            # benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=t_padding)
+            # trg2 .= view(pfield, :, 1:size(trg2, 2))
+
             diff = abs.(trg .- trg2)
             err_norm = sqrt(sum(abs2, diff)/length(diff))
             diff_bool = diff .< eps(T)
@@ -1049,7 +1051,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
                 # Write to file to check errors
                 # writedlm("trg_cpu.dat", trg[10, :])
                 # writedlm("trg_gpu.dat", trg2[10, :])
-                if ns < 10 && debug
+                if debug
                     display(trg[10:12, :])
                     display(trg2[10:12, :])
                     display(diff[10:12, :])
@@ -1143,4 +1145,4 @@ end
 # main(3, ns=1480; debug=true)
 # main(1; ns=2^10)
 # main(3; ns=2^10)
-main(1; ns=4, padding=false)
+main(1; ns=4, p=2, padding=false, debug=true)
