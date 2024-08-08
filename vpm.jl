@@ -1007,7 +1007,7 @@ function check_launch(n, p, q; throw_error=true, max_threads_per_block=384)
     return isgood
 end
 
-function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max_threads_per_block=384)
+function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max_threads_per_block=384, algorithm=3)
     T = Float64
 
     nt = nt==0 ? ns : nt
@@ -1032,15 +1032,25 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
         if run_option == 1
             println("CPU Run")
             cpu_vpm!(src, trg)
+
             println("GPU Run")
-            # benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
-            # benchmark4_gpu!(src2, trg2, p, q)
-            # benchmark5_gpu!(src2, trg2, p, q)
-            # benchmark6_gpu!(src2, trg2, p, q)
-            # benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
-            pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-            benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=t_padding)
-            trg2 .= view(pfield, :, 1:size(trg2, 2))
+            if algorithm == 3
+                benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            elseif algorithm == 4
+                benchmark4_gpu!(src2, trg2, p, q)
+            elseif algorithm == 5
+                benchmark5_gpu!(src2, trg2, p, q)
+            elseif algorithm == 6
+                benchmark6_gpu!(src2, trg2, p, q)
+            elseif algorithm == 7
+                benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            elseif algorithm == 8
+                pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
+                benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=t_padding)
+                trg2 .= view(pfield, :, 1:size(trg2, 2))
+            else
+                @error "Invalid algorithm selected"
+            end
 
             diff = abs.(trg .- trg2)
             err_norm = sqrt(sum(abs2, diff)/length(diff))
@@ -1067,21 +1077,48 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
             end
         else
             println("Running profiler...")
-            CUDA.@profile external=true benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
-            # CUDA.@profile external=true benchmark4_gpu!(src2, trg2, p, q)
-            # CUDA.@profile external=true benchmark5_gpu!(src2, trg2, p, q)
-            # CUDA.@profile external=true benchmark6_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            if algorithm == 3
+                CUDA.@profile  benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            elseif algorithm == 4
+                CUDA.@profile  benchmark4_gpu!(src2, trg2, p, q)
+            elseif algorithm == 5
+                CUDA.@profile  benchmark5_gpu!(src2, trg2, p, q)
+            elseif algorithm == 6
+                CUDA.@profile  benchmark6_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            elseif algorithm == 7
+                CUDA.@profile benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            elseif algorithm == 8
+                pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
+                CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=t_padding)
+                trg2 .= view(pfield, :, 1:size(trg2, 2))
+            else
+                @error "Invalid algorithm selected"
+            end
         end
     else
         check_launch(nt+t_padding, p, q, max_threads_per_block=max_threads_per_block)
 
         src, trg, src2, trg2 = get_inputs(ns, nfields)
         t_cpu = @benchmark cpu_vpm!($src, $trg)
-        t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
-        # t_gpu = @benchmark benchmark4_gpu!($src2, $trg2, $p, $q)
-        # t_gpu = @benchmark benchmark5_gpu!($src2, $trg2, $p, $q)
-        # t_gpu = @benchmark benchmark6_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
-        # t_gpu = @benchmark benchmark7_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
+
+        if algorithm == 3
+            t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
+        elseif algorithm == 4
+            t_gpu = @benchmark benchmark4_gpu!($src2, $trg2, $p, $q)
+        elseif algorithm == 5
+            t_gpu = @benchmark benchmark5_gpu!($src2, $trg2, $p, $q)
+        elseif algorithm == 6
+            t_gpu = @benchmark benchmark6_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
+        elseif algorithm == 7
+            t_gpu = @benchmark benchmark7_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
+        elseif algorithm == 8
+            pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
+            benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=t_padding)
+            trg2 .= view(pfield, :, 1:size(trg2, 2))
+        else
+            @error "Invalid algorithm selected"
+        end
+
         speedup = median(t_cpu.times)/median(t_gpu.times)
         println("$ns $speedup")
     end
@@ -1130,9 +1167,9 @@ function get_launch_config(nt; p_max=384, max_threads_per_block=384)
 end
 
 # Run_option - # [1]test [2]profile [3]benchmark
-# for i in 5:17
-#     main(3; ns=2^i)
-# end
+for i in 5:17
+    main(3; ns=2^i, algorithm=3)
+end
 # main(1; ns=2, debug=true)
 # main(3; ns=2^9, nt=2^12, debug=true)
 # main(1; ns=8739, nt=3884, debug=true)
@@ -1145,4 +1182,3 @@ end
 # main(3, ns=1480; debug=true)
 # main(1; ns=2^10)
 # main(3; ns=2^10)
-main(1; ns=4, nt=4, p=2, padding=false, debug=true)
