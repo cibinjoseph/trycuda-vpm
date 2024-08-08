@@ -771,11 +771,11 @@ function gpu_vpm8!(pfield, tidx_min, tidx_max, s_indices,
     row::Int32 = (ithread-1i32) % p + 1i32
     col::Int32 = floor(Int32, (ithread-1i32)/p) + 1i32
 
-    itarget::Int32 = row + (blockIdx().x-1i32)*p
-    if itarget <= t_size
-        @inbounds tx = pfield[1, tidx_min+itarget-1]
-        @inbounds ty = pfield[2, tidx_min+itarget-1]
-        @inbounds tz = pfield[3, tidx_min+itarget-1]
+    itarget::Int32 = tidx_min + (row + (blockIdx().x-1i32)*p) - 1
+    if tidx_min <= itarget && itarget <= tidx_max
+        @inbounds tx = pfield[1, itarget]
+        @inbounds ty = pfield[2, itarget]
+        @inbounds tz = pfield[3, itarget]
     end
 
     n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
@@ -815,7 +815,7 @@ function gpu_vpm8!(pfield, tidx_min, tidx_max, s_indices,
         while i <= bodies_per_col
             isource = i + bodies_per_col*(col-1)
             if isource <= s_size
-                if itarget >= tidx_min && itarget <= tidx_max
+                if tidx_min <= itarget && itarget <= tidx_max
                     out .= gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
                 end
 
@@ -834,15 +834,15 @@ function gpu_vpm8!(pfield, tidx_min, tidx_max, s_indices,
 
     # Sum up accelerations for each target/thread
     # Each target will be accessed by q no. of threads
-    if itarget >= tidx_min && itarget <= tidx_max
+    if tidx_min <= itarget && itarget <= tidx_max
         idim = 1
         while idim <=3
-            @inbounds CUDA.@atomic pfield[9+idim, tidx_min+itarget-1] += UJ[idim]
+            @inbounds CUDA.@atomic pfield[9+idim, itarget] += UJ[idim]
             idim += 1
         end
         idim = 4
         while idim <= 12
-            @inbounds CUDA.@atomic pfield[12+idim, tidx_min+itarget-1] += UJ[idim]
+            @inbounds CUDA.@atomic pfield[12+idim, itarget] += UJ[idim]
             idim += 1
         end
     end
@@ -980,15 +980,19 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=
     tidx_offset::Int32 = 0 
     sidx_offset::Int32 = 0 
     kernel = gpu_g_dgdr
+    nstreams = 2
 
-    # Num of threads in a tile should always be 
-    # less than number of threads in a block (1024)
-    # or limited by memory size
-    threads::Int32 = p*q
-    blocks::Int32 = cld(t_size, p)
-    shmem = sizeof(eltype(pfield)) * 7 * p  # XYZ + Γ123 + σ = 7 variables
+    threads::Int32 = cld(p*q, 4)
+    blocks::Int32 = cld(cld(t_size, 2), cld(p, 2))
+    shmem = sizeof(eltype(pfield)) * 7 * cld(p,2)  # XYZ + Γ123 + σ = 7 variables
 
-    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm8!(pfield_d, tidx_min, tidx_max, s_indices_d, tidx_offset, sidx_offset, Int32(p), Int32(q), kernel)
+    stream = CuStream()
+    tidx_mid::Int32 = cld(t_size, 2)
+    @cuda threads=threads blocks=blocks stream=stream shmem=shmem gpu_vpm8!(pfield_d, tidx_min, tidx_mid, s_indices_d, tidx_offset, sidx_offset, Int32(cld(p, 2)), Int32(cld(q, 2)), kernel)
+
+    stream = CuStream()
+    tidx_min = tidx_mid + 1
+    @cuda threads=threads blocks=blocks stream=stream shmem=shmem gpu_vpm8!(pfield_d, tidx_min, tidx_max, s_indices_d, tidx_offset, sidx_offset, Int32(cld(p, 2)), Int32(cld(q, 2)), kernel)
 
     pfield[10:12, :] .= Array(view(pfield_d, 10:12, :))
     pfield[16:24, :] .= Array(view(pfield_d, 16:24, :))
@@ -1168,7 +1172,7 @@ end
 
 # Run_option - # [1]test [2]profile [3]benchmark
 for i in 5:17
-    main(3; ns=2^i, algorithm=8)
+    main(3; ns=2^i, algorithm=3)
 end
 # main(1; ns=2, debug=true)
 # main(3; ns=2^9, nt=2^12, debug=true)
@@ -1181,4 +1185,4 @@ end
 # main(3, ns=1579; debug=true)
 # main(3, ns=1480; debug=true)
 # main(1; ns=2^10)
-# main(3; ns=2^10)
+# main(3; ns=2^10, algorithm=3, debug=true, padding=false)
