@@ -976,7 +976,7 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=
     pfield_d = CuArray(view(pfield, 1:24, :))
     s_indices_d = CuArray(s_indices)
 
-    t_size::Int32 = tidx_max-tidx_max+1+t_padding
+    t_size::Int32 = tidx_max-tidx_min+1+t_padding
     tidx_offset::Int32 = 0 
     sidx_offset::Int32 = 0 
     kernel = gpu_g_dgdr
@@ -1033,14 +1033,14 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
             println("CPU Run")
             cpu_vpm!(src, trg)
             println("GPU Run")
-            benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            # benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
             # benchmark4_gpu!(src2, trg2, p, q)
             # benchmark5_gpu!(src2, trg2, p, q)
             # benchmark6_gpu!(src2, trg2, p, q)
             # benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
-            # pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-            # benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=t_padding)
-            # trg2 .= view(pfield, :, 1:size(trg2, 2))
+            pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
+            benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=t_padding)
+            trg2 .= view(pfield, :, 1:size(trg2, 2))
 
             diff = abs.(trg .- trg2)
             err_norm = sqrt(sum(abs2, diff)/length(diff))
@@ -1145,4 +1145,4 @@ end
 # main(3, ns=1480; debug=true)
 # main(1; ns=2^10)
 # main(3; ns=2^10)
-main(1; ns=4, p=2, padding=false, debug=true)
+main(1; ns=4, nt=4, p=2, padding=false, debug=true)
