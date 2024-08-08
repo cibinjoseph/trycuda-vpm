@@ -1113,7 +1113,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
             t_gpu = @benchmark benchmark7_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
         elseif algorithm == 8
             pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-            benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=t_padding)
+            t_gpu = @benchmark benchmark8_gpu!($pfield, $tidx_min, $tidx_max, $s_indices, $p, $q; t_padding=$t_padding)
             trg2 .= view(pfield, :, 1:size(trg2, 2))
         else
             @error "Invalid algorithm selected"
@@ -1168,7 +1168,7 @@ end
 
 # Run_option - # [1]test [2]profile [3]benchmark
 for i in 5:17
-    main(3; ns=2^i, algorithm=3)
+    main(3; ns=2^i, algorithm=8)
 end
 # main(1; ns=2, debug=true)
 # main(3; ns=2^9, nt=2^12, debug=true)
