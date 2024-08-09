@@ -1016,11 +1016,8 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
 
     nt = nt==0 ? ns : nt
 
-    t_padding = 0
-    # Pad target array to nearest multiple of 10 for efficient p, q launch configuration
-    if padding && mod(nt, 10) > 0
-        t_padding =  10 - mod(nt, 10)
-    end
+    # Pad target array to nearest multiple of 32 for efficient p, q launch configuration
+    t_padding = (mod(nt, 32) == 0) ? 0 : 32*cld(nt, 32) - nt
     if p == 0
         p, q = get_launch_config(nt+t_padding; max_threads_per_block=max_threads_per_block)
     end
@@ -1039,7 +1036,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
 
             println("GPU Run")
             if algorithm == 3
-                benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
+                @time benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
             elseif algorithm == 4
                 benchmark4_gpu!(src2, trg2, p, q)
             elseif algorithm == 5
@@ -1171,18 +1168,9 @@ function get_launch_config(nt; p_max=384, max_threads_per_block=384)
 end
 
 # Run_option - # [1]test [2]profile [3]benchmark
-for i in 5:17
-    main(3; ns=2^i, algorithm=3)
-end
-# main(1; ns=2, debug=true)
+# for i in 5:17
+#     main(3; ns=2^i, algorithm=3)
+# end
 # main(3; ns=2^9, nt=2^12, debug=true)
 # main(1; ns=8739, nt=3884, debug=true)
-# main(1; ns=33, p=11, padding=false)
-# main(1; ns=130, p=26, q=2)
-# main(1; ns=8, p=4, q=2, padding=false, debug=true)
-# main(3, ns=1459; debug=true)
-# main(3, ns=1460; debug=true)
-# main(3, ns=1579; debug=true)
-# main(3, ns=1480; debug=true)
-# main(1; ns=2^10)
-# main(3; ns=2^10, algorithm=3, debug=true, padding=false)
+main(1; ns=48400, algorithm=3)
