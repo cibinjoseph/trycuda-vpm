@@ -994,7 +994,7 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q;
 
         # Kernel launch config
         p, q = get_launch_config(step; max_threads_per_block=max_threads_per_block)
-        @show p, q
+        # @show p, q
         threads::Int32 = p*q
         blocks::Int32 = cld(step, p)
         shmem = sizeof(eltype(pfield)) * 7 * p  # XYZ + Γ123 + σ = 7 variables
@@ -1008,6 +1008,9 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q;
         istart = istop + 1
         istop = istart
     end
+
+    # Synchronize all streams before memcopy from gpu to cpu
+    CUDA.device_synchronize()
 
     pfield[10:12, :] .= Array(view(pfield_d, 10:12, :))
     pfield[16:24, :] .= Array(view(pfield_d, 16:24, :))
@@ -1062,7 +1065,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
                 benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
             elseif algorithm == 8
                 pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-                benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q;
+                CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q;
                                 t_padding=t_padding, max_threads_per_block=max_threads_per_block)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             else
@@ -1189,4 +1192,4 @@ end
 # end
 # main(3; ns=2^9, nt=2^12, debug=true)
 # main(1; ns=8739, nt=3884, debug=true)
-main(1; ns=2^7, algorithm=8, debug=true)
+main(2; ns=2^9, algorithm=8, debug=true)
