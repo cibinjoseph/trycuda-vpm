@@ -972,7 +972,9 @@ function prep8_gpu!(s, t)
     return pfield, tidx_min, tidx_max, s_indices
 end
 
-function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=0)
+function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q;
+        t_padding=0, max_threads_per_block=0)
+
     pfield_d = CuArray(view(pfield, 1:24, :))
     s_indices_d = CuArray(s_indices)
 
@@ -982,17 +984,30 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=
     kernel = gpu_g_dgdr
     nstreams = 2
 
-    threads::Int32 = cld(p*q, 4)
-    blocks::Int32 = cld(cld(t_size, 2), cld(p, 2))
-    shmem = sizeof(eltype(pfield)) * 7 * cld(p,2)  # XYZ + Γ123 + σ = 7 variables
+    nt_remaining = t_size
+    istart = tidx_min
+    istop = tidx_min
+    for istream = nstreams:-1:1
+        # Compute no. of indices to be loaded into kernel
+        step = cld(nt_remaining, istream)
+        istop += step-1
 
-    stream = CuStream()
-    tidx_mid::Int32 = cld(t_size, 2)
-    @cuda threads=threads blocks=blocks stream=stream shmem=shmem gpu_vpm8!(pfield_d, tidx_min, tidx_mid, s_indices_d, tidx_offset, sidx_offset, Int32(cld(p, 2)), Int32(cld(q, 2)), kernel)
+        # Kernel launch config
+        p, q = get_launch_config(step; max_threads_per_block=max_threads_per_block)
+        @show p, q
+        threads::Int32 = p*q
+        blocks::Int32 = cld(step, p)
+        shmem = sizeof(eltype(pfield)) * 7 * p  # XYZ + Γ123 + σ = 7 variables
 
-    stream = CuStream()
-    tidx_min = tidx_mid + 1
-    @cuda threads=threads blocks=blocks stream=stream shmem=shmem gpu_vpm8!(pfield_d, tidx_min, tidx_max, s_indices_d, tidx_offset, sidx_offset, Int32(cld(p, 2)), Int32(cld(q, 2)), kernel)
+        # Launch kernel
+        stream = CuStream()
+        @cuda threads=threads blocks=blocks stream=stream shmem=shmem gpu_vpm8!(pfield_d, istart, istop, s_indices_d, tidx_offset, sidx_offset, Int32(p), Int32(q), kernel)
+
+        # Update indices
+        nt_remaining -= step
+        istart = istop + 1
+        istop = istart
+    end
 
     pfield[10:12, :] .= Array(view(pfield_d, 10:12, :))
     pfield[16:24, :] .= Array(view(pfield_d, 16:24, :))
@@ -1047,7 +1062,8 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
                 benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
             elseif algorithm == 8
                 pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-                benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=t_padding)
+                benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q;
+                                t_padding=t_padding, max_threads_per_block=max_threads_per_block)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             else
                 @error "Invalid algorithm selected"
@@ -1173,4 +1189,4 @@ end
 # end
 # main(3; ns=2^9, nt=2^12, debug=true)
 # main(1; ns=8739, nt=3884, debug=true)
-main(1; ns=48400, algorithm=3)
+main(1; ns=2^7, algorithm=8, debug=true)
