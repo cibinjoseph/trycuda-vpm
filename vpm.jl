@@ -987,25 +987,28 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q;
     nt_remaining = t_size
     istart = tidx_min
     istop = tidx_min
-    for istream = nstreams:-1:1
+
+    threads = zeros(Int32, nstreams)
+    blocks = zeros(Int32, nstreams)
+    t_start = zeros(Int32, nstreams)
+    t_stop = zeros(Int32, nstreams)
+    p = zeros(Int32, nstreams)
+    q = zeros(Int32, nstreams)
+
+    # Compute launch config for each stream
+    for i = nstreams:-1:1
         # Compute no. of indices to be loaded into kernel
-        step = cld(nt_remaining, istream)
+        step = cld(nt_remaining, i)
         istop += step-1
 
         # Kernel launch config
-        p, q = get_launch_config(step; max_threads_per_block=max_threads_per_block)
+        p[i], q[i] = get_launch_config(step; max_threads_per_block=max_threads_per_block)
         # @show p, q
-        threads::Int32 = p*q
-        blocks::Int32 = cld(step, p)
-        shmem = sizeof(eltype(pfield)) * 7 * p  # XYZ + Γ123 + σ = 7 variables
+        threads[i] = p[i]*q[i]
+        blocks[i] = cld(step, p[i])
 
-        # Launch kernel
-        stream = CuStream()
-        @cuda threads=threads blocks=blocks stream=stream shmem=shmem gpu_vpm8!(pfield_d, istart, istop, s_indices_d, tidx_offset, sidx_offset, Int32(p), Int32(q), kernel)
-
-        # Copy data back from GPU to CPU
-        pfield[10:12, istart:istop] .= Array(view(pfield_d, 10:12, istart:istop))
-        pfield[16:24, istart:istop] .= Array(view(pfield_d, 16:24, istart:istop))
+        t_start[i] = istart
+        t_stop[i] = istop
 
         # Update indices
         nt_remaining -= step
@@ -1013,7 +1016,20 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q;
         istop = istart
     end
 
-    # # Synchronize all streams before memcopy from gpu to cpu
+    # Run kernels
+    for i = nstreams:-1:1
+        # Launch kernel
+        # stream = CuStream()
+
+        shmem = sizeof(eltype(pfield)) * 7 * p[i]  # XYZ + Γ123 + σ = 7 variables
+        @cuda threads=threads[i] blocks=blocks[i] shmem=shmem gpu_vpm8!(pfield_d, t_start[i], t_stop[i], s_indices_d, tidx_offset, sidx_offset, p[i], q[i], kernel)
+
+        # Copy data back from GPU to CPU
+        pfield[10:12, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 10:12, t_start[i]:t_stop[i]))
+        pfield[16:24, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 16:24, t_start[i]:t_stop[i]))
+    end
+
+    # Synchronize all streams before memcopy from gpu to cpu
     # CUDA.device_synchronize()
 
     # pfield[10:12, :] .= Array(view(pfield_d, 10:12, :))
