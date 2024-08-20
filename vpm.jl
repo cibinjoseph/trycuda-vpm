@@ -1003,17 +1003,21 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q;
         stream = CuStream()
         @cuda threads=threads blocks=blocks stream=stream shmem=shmem gpu_vpm8!(pfield_d, istart, istop, s_indices_d, tidx_offset, sidx_offset, Int32(p), Int32(q), kernel)
 
+        # Copy data back from GPU to CPU
+        pfield[10:12, istart:istop] .= Array(view(pfield_d, 10:12, istart:istop))
+        pfield[16:24, istart:istop] .= Array(view(pfield_d, 16:24, istart:istop))
+
         # Update indices
         nt_remaining -= step
         istart = istop + 1
         istop = istart
     end
 
-    # Synchronize all streams before memcopy from gpu to cpu
-    CUDA.device_synchronize()
+    # # Synchronize all streams before memcopy from gpu to cpu
+    # CUDA.device_synchronize()
 
-    pfield[10:12, :] .= Array(view(pfield_d, 10:12, :))
-    pfield[16:24, :] .= Array(view(pfield_d, 16:24, :))
+    # pfield[10:12, :] .= Array(view(pfield_d, 10:12, :))
+    # pfield[16:24, :] .= Array(view(pfield_d, 16:24, :))
 end
 
 
@@ -1192,4 +1196,4 @@ end
 # end
 # main(3; ns=2^9, nt=2^12, debug=true)
 # main(1; ns=8739, nt=3884, debug=true)
-main(2; ns=2^9, algorithm=8, debug=true)
+main(1; ns=2^9, algorithm=8, debug=true)
