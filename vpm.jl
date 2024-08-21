@@ -982,7 +982,7 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q;
     tidx_offset::Int32 = 0 
     sidx_offset::Int32 = 0 
     kernel = gpu_g_dgdr
-    nstreams = 2
+    nstreams = 8
 
     nt_remaining = t_size
     istart = tidx_min
@@ -1016,17 +1016,23 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q;
         istop = istart
     end
 
+    streams = Vector{CuStream}(undef, nstreams)
     # Run kernels
     for i = nstreams:-1:1
         # Launch kernel
-        # stream = CuStream()
+        streams[i] = CuStream()
 
         shmem = sizeof(eltype(pfield)) * 7 * p[i]  # XYZ + Γ123 + σ = 7 variables
-        @cuda threads=threads[i] blocks=blocks[i] shmem=shmem gpu_vpm8!(pfield_d, t_start[i], t_stop[i], s_indices_d, tidx_offset, sidx_offset, p[i], q[i], kernel)
+        @cuda threads=threads[i] blocks=blocks[i] stream=streams[i] shmem=shmem gpu_vpm8!(pfield_d, t_start[i], t_stop[i], s_indices_d, tidx_offset, sidx_offset, p[i], q[i], kernel)
+    end
 
-        # Copy data back from GPU to CPU
-        pfield[10:12, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 10:12, t_start[i]:t_stop[i]))
-        pfield[16:24, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 16:24, t_start[i]:t_stop[i]))
+    # Copy data back from GPU to CPU
+    @sync for i = nstreams:-1:1
+        @async begin
+            CUDA.synchronize(streams[i])
+            pfield[10:12, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 10:12, t_start[i]:t_stop[i]))
+            pfield[16:24, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 16:24, t_start[i]:t_stop[i]))
+        end
     end
 
     # Synchronize all streams before memcopy from gpu to cpu
@@ -1212,4 +1218,5 @@ end
 # end
 # main(3; ns=2^9, nt=2^12, debug=true)
 # main(1; ns=8739, nt=3884, debug=true)
-main(1; ns=2^9, algorithm=8, debug=true)
+main(3; ns=2^9, algorithm=3, debug=true)
+main(3; ns=2^9, algorithm=8, debug=true)
