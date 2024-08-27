@@ -972,7 +972,7 @@ function prep8_gpu!(s, t)
     return pfield, tidx_min, tidx_max, s_indices
 end
 
-function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q;
+function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
         t_padding=0, max_threads_per_block=0)
 
     pfield_d = CuArray(view(pfield, 1:24, :))
@@ -982,7 +982,7 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q;
     tidx_offset::Int32 = 0 
     sidx_offset::Int32 = 0 
     kernel = gpu_g_dgdr
-    nstreams = 2
+    nstreams = 3
     nstreams_range = nstreams:-1:1
 
     nt_remaining = t_size
@@ -1020,20 +1020,31 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q;
     # Run kernels
     streams = Vector{CuStream}(undef, nstreams)
     for i in nstreams_range
-        # Launch kernel
-        streams[i] = CuStream()
+        if i <= 2
+            # Launch kernel
+            streams[i] = CuStream()
 
-        shmem = sizeof(eltype(pfield)) * 7 * p[i]  # XYZ + Γ123 + σ = 7 variables
-        @cuda threads=threads[i] blocks=blocks[i] stream=streams[i] shmem=shmem gpu_vpm8!(pfield_d, t_start[i], t_stop[i], s_indices_d, tidx_offset, sidx_offset, p[i], q[i], kernel)
-    end
+            shmem = sizeof(eltype(pfield)) * 7 * p[i]  # XYZ + Γ123 + σ = 7 variables
+            @cuda threads=threads[i] blocks=blocks[i] stream=streams[i] shmem=shmem gpu_vpm8!(pfield_d, t_start[i], t_stop[i], s_indices_d, tidx_offset, sidx_offset, p[i], q[i], kernel)
 
-    for i = nstreams:-1:1
-        stream!(streams[i]) do
-            # Copy data back from GPU to CPU
-            pfield[10:12, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 10:12, t_start[i]:t_stop[i]))
-            pfield[16:24, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 16:24, t_start[i]:t_stop[i]))
+            stream!(streams[i]) do
+                # Copy data back from GPU to CPU
+                pfield[10:12, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 10:12, t_start[i]:t_stop[i]))
+                pfield[16:24, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 16:24, t_start[i]:t_stop[i]))
+            end
         end
     end
+
+    # for i = nstreams:-1:1
+    #     if i <= 2
+    #         stream!(streams[i]) do
+    #             # Copy data back from GPU to CPU
+    #             pfield[10:12, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 10:12, t_start[i]:t_stop[i]))
+    #             pfield[16:24, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 16:24, t_start[i]:t_stop[i]))
+    #         end
+    #     end
+    # end
+    return
 end
 
 
@@ -1153,7 +1164,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
             t_gpu = @benchmark benchmark7_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
         elseif algorithm == 8
             pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-            t_gpu = @benchmark benchmark8_gpu!($pfield, $tidx_min, $tidx_max, $s_indices, $p, $q; t_padding=$t_padding)
+            t_gpu = @benchmark benchmark8_gpu!($pfield, $tidx_min, $tidx_max, $s_indices; t_padding=$t_padding)
             println(t_gpu)
             trg2 .= view(pfield, :, 1:size(trg2, 2))
         else
@@ -1213,5 +1224,4 @@ end
 # end
 # main(3; ns=2^9, nt=2^12, debug=true)
 # main(1; ns=8739, nt=3884, debug=true)
-main(3; ns=2^9, algorithm=8)
-main(3; ns=2^8, algorithm=8)
+main(1; ns=2^9, algorithm=8)
