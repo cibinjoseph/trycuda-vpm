@@ -4,6 +4,7 @@ using BenchmarkTools
 using Random
 using StaticArrays
 using Primes
+import NVTX
 
 const eps2 = 1e-6
 const const4 = 0.25/pi
@@ -983,7 +984,7 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
     tidx_offset::Int32 = 0 
     sidx_offset::Int32 = 0 
     kernel = gpu_g_dgdr
-    nstreams = 4
+    nstreams = 2
     nstreams_range = nstreams:-1:1
 
     nt_remaining = t_size
@@ -1018,6 +1019,8 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
         istop = istart
     end
 
+    UJ_indices = [10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
+
     # Run kernels
     streams = Vector{CuStream}(undef, nstreams)
     for i in nstreams_range
@@ -1028,9 +1031,7 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
         @cuda threads=threads[i] blocks=blocks[i] stream=streams[i] shmem=shmem gpu_vpm8!(pfield_d, t_start[i], t_stop[i], s_indices_d, tidx_offset, sidx_offset, p[i], q[i], kernel)
     end
 
-    UJ_indices = [10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
-
-    for i = nstreams:-1:1
+    for i in nstreams_range
         stream!(streams[i]) do
             # Copy data back from GPU to CPU
             view(pfield, UJ_indices, t_start[i]:t_stop[i]) .= Array(view(pfield_d, UJ_indices, t_start[i]:t_stop[i]))
