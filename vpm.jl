@@ -9,6 +9,7 @@ const eps2 = 1e-6
 const const4 = 0.25/pi
 const nfields = 43
 
+
 # Definitions for GPU erf() function
 include("my_erf.jl")
 
@@ -982,7 +983,7 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
     tidx_offset::Int32 = 0 
     sidx_offset::Int32 = 0 
     kernel = gpu_g_dgdr
-    nstreams = 3
+    nstreams = 4
     nstreams_range = nstreams:-1:1
 
     nt_remaining = t_size
@@ -1020,30 +1021,21 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
     # Run kernels
     streams = Vector{CuStream}(undef, nstreams)
     for i in nstreams_range
-        if i <= 2
-            # Launch kernel
-            streams[i] = CuStream()
+        # Launch kernel
+        streams[i] = CuStream()
 
-            shmem = sizeof(eltype(pfield)) * 7 * p[i]  # XYZ + Γ123 + σ = 7 variables
-            @cuda threads=threads[i] blocks=blocks[i] stream=streams[i] shmem=shmem gpu_vpm8!(pfield_d, t_start[i], t_stop[i], s_indices_d, tidx_offset, sidx_offset, p[i], q[i], kernel)
-
-            stream!(streams[i]) do
-                # Copy data back from GPU to CPU
-                pfield[10:12, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 10:12, t_start[i]:t_stop[i]))
-                pfield[16:24, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 16:24, t_start[i]:t_stop[i]))
-            end
-        end
+        shmem = sizeof(eltype(pfield)) * 7 * p[i]  # XYZ + Γ123 + σ = 7 variables
+        @cuda threads=threads[i] blocks=blocks[i] stream=streams[i] shmem=shmem gpu_vpm8!(pfield_d, t_start[i], t_stop[i], s_indices_d, tidx_offset, sidx_offset, p[i], q[i], kernel)
     end
 
-    # for i = nstreams:-1:1
-    #     if i <= 2
-    #         stream!(streams[i]) do
-    #             # Copy data back from GPU to CPU
-    #             pfield[10:12, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 10:12, t_start[i]:t_stop[i]))
-    #             pfield[16:24, t_start[i]:t_stop[i]] .= Array(view(pfield_d, 16:24, t_start[i]:t_stop[i]))
-    #         end
-    #     end
-    # end
+    UJ_indices = [10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
+
+    for i = nstreams:-1:1
+        stream!(streams[i]) do
+            # Copy data back from GPU to CPU
+            view(pfield, UJ_indices, t_start[i]:t_stop[i]) .= Array(view(pfield_d, UJ_indices, t_start[i]:t_stop[i]))
+        end
+    end
     return
 end
 
@@ -1096,7 +1088,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
                 benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
             elseif algorithm == 8
                 pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-                CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q;
+                CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
                                 t_padding=t_padding, max_threads_per_block=max_threads_per_block)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             else
@@ -1140,7 +1132,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
                 CUDA.@profile benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
             elseif algorithm == 8
                 pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-                CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices, p, q; t_padding=t_padding)
+                CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices; t_padding=t_padding)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             else
                 @error "Invalid algorithm selected"
