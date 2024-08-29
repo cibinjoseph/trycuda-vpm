@@ -838,7 +838,7 @@ function gpu_vpm8!(pfield, tidx_min, tidx_max, s_indices,
     # Each target will be accessed by q no. of threads
     if tidx_min <= itarget && itarget <= tidx_max
         idim = 1
-        while idim <=3
+        while idim <= 3
             @inbounds CUDA.@atomic pfield[9+idim, itarget] += UJ[idim]
             idim += 1
         end
@@ -984,7 +984,7 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
     tidx_offset::Int32 = 0 
     sidx_offset::Int32 = 0 
     kernel = gpu_g_dgdr
-    nstreams = 2
+    nstreams = 4
     nstreams_range = nstreams:-1:1
 
     nt_remaining = t_size
@@ -1005,8 +1005,8 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
         istop += step-1
 
         # Kernel launch config
-        p[i], q[i] = get_launch_config(step; max_threads_per_block=max_threads_per_block)
-        # @show p, q
+        p[i], q[i] = get_launch_config(step; q_max=4, max_threads_per_block=max_threads_per_block)
+        # i == 1 && @show step, p[i], q[i]
         threads[i] = p[i]*q[i]
         blocks[i] = cld(step, p[i])
 
@@ -1040,17 +1040,14 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
     return
 end
 
+function check_launch(n, p, q, max_threads_per_block=0; throw_error=false)
+    if p > n; throw_error && error("p must be less than or equal to n"); return false; end
+    if p*q >= max_threads_per_block; throw_error && error("p*q must be less than $max_threads_per_block"); return false; end
+    if q > p; throw_error && error("q must be less than or equal to p"); return false; end
+    if n % p != 0; throw_error && error("n must be divisible by p"); return false; end
+    if p % q != 0; throw_error && error("p must be divisible by q"); return false; end
 
-function check_launch(n, p, q; throw_error=true, max_threads_per_block=384)
-    isgood = true
-
-    if p > n; isgood = false; throw_error && error("p must be less than or equal to n"); end
-    if p*q >= max_threads_per_block; isgood = false; throw_error && error("p*q must be less than $max_threads_per_block"); end
-    if q > p; isgood = false; throw_error && error("q=$q must be less than or equal to p=$p"); end
-    if n % p != 0; isgood = false; throw_error && error("n=$n must be divisible by p=$p"); end
-    if p % q != 0; isgood = false; throw_error && error("p must be divisible by q"); end
-
-    return isgood
+    return true
 end
 
 function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max_threads_per_block=384, algorithm=3)
@@ -1069,7 +1066,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
         println("Tile length, p: $p")
         println("Cols per tile, q: $q")
 
-        check_launch(nt+t_padding, p, q; max_threads_per_block=max_threads_per_block)
+        check_launch(nt+t_padding, p, q, max_threads_per_block)
 
         src, trg, src2, trg2 = get_inputs(ns, nfields; T=T, nt=nt)
         if run_option == 1
@@ -1133,14 +1130,14 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
                 CUDA.@profile benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
             elseif algorithm == 8
                 pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-                CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices; t_padding=t_padding)
+                CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices; t_padding=t_padding, max_threads_per_block=max_threads_per_block)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             else
                 @error "Invalid algorithm selected"
             end
         end
     else
-        check_launch(nt+t_padding, p, q, max_threads_per_block=max_threads_per_block)
+        check_launch(nt+t_padding, p, q, max_threads_per_block)
 
         src, trg, src2, trg2 = get_inputs(ns, nfields)
         t_cpu = @benchmark cpu_vpm!($src, $trg)
@@ -1157,8 +1154,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
             t_gpu = @benchmark benchmark7_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
         elseif algorithm == 8
             pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-            t_gpu = @benchmark benchmark8_gpu!($pfield, $tidx_min, $tidx_max, $s_indices; t_padding=$t_padding)
-            println(t_gpu)
+            t_gpu = @benchmark benchmark8_gpu!($pfield, $tidx_min, $tidx_max, $s_indices; t_padding=$t_padding, max_threads_per_block=$max_threads_per_block)
             trg2 .= view(pfield, :, 1:size(trg2, 2))
         else
             @error "Invalid algorithm selected"
@@ -1170,7 +1166,10 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
     return
 end
 
-function get_launch_config(nt; p_max=384, max_threads_per_block=384)
+function get_launch_config(nt; p_max=0, q_max=0, max_threads_per_block=384)
+    p_max = (p_max == 0) ? max_threads_per_block : p_max
+    q_max = (q_max == 0) ? p_max : q_max
+
     divs_n = sort(divisors(nt))
     p = 1
     q = 1
@@ -1179,29 +1178,31 @@ function get_launch_config(nt; p_max=384, max_threads_per_block=384)
         if div <= p_max
             p = div
             ip = i
+        else
+            break
         end
     end
 
-    # Decision algorithm 1: Creates a matrix using indices and finds max of 
+    # Decision algorithm 1: Creates a matrix using indices and finds max of
     # weighted sum of indices
 
     i_weight = 0
     j_weight = 1-i_weight
 
     max_ij = i_weight*ip + j_weight*1
-    if nt <= 2^13
-        divs_p = divs_n
-        for i in 1:length(divs_n)
-            for j in 1:length(divs_n)
-                isgood = check_launch(nt, divs_n[i], divs_p[j]; throw_error=false, max_threads_per_block=max_threads_per_block)
+    if nt <= 1<<13
+        isgood = true
+        for i in 1:ip
+            for j in 1:ip
+                isgood = check_launch(nt, divs_n[i], divs_n[j], max_threads_per_block)
                 if isgood && (divs_n[i] <= p_max)
                     # Check if this is the max achievable ij value
                     # in the p, q choice matrix
                     obj_val = i_weight*i+j_weight*j
-                    if obj_val >= max_ij
+                    if (obj_val >= max_ij) && (divs_n[j] <= q_max)
                         max_ij = obj_val
                         p = divs_n[i]
-                        q = divs_p[j]
+                        q = divs_n[j]
                     end
                 end
             end
@@ -1217,4 +1218,4 @@ end
 # end
 # main(3; ns=2^9, nt=2^12, debug=true)
 # main(1; ns=8739, nt=3884, debug=true)
-main(1; ns=2^9, algorithm=8)
+main(3; ns=2^9, algorithm=8)
