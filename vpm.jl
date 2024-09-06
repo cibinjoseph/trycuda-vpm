@@ -1218,4 +1218,4 @@ end
 # end
 # main(3; ns=2^9, nt=2^12, debug=true)
 # main(1; ns=8739, nt=3884, debug=true)
-main(3; ns=2^9, algorithm=8)
+main(1; ns=2^9, algorithm=8)
