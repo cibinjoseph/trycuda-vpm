@@ -1,1 +1,0 @@
-These set of programs were written to understand the concepts described in the chapter on [shared memory](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#shared-memory) in the CUDA documentation.
