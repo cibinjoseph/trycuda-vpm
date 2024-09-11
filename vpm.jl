@@ -223,6 +223,8 @@ end
 
 # Each thread handles a single target and uses local GPU memory
 # Sources divided into multiple columns and influence is computed by multiple threads
+# p - no. of targets in a block
+# q - no. of threads handling a single target
 function gpu_vpm3!(s, t, p, num_cols, kernel)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
@@ -851,6 +853,106 @@ function gpu_vpm8!(pfield, tidx_min, tidx_max, s_indices,
     return
 end
 
+# Each thread handles a single target and uses local GPU memory
+# Sources divided into multiple columns and influence is computed by multiple threads
+# pt - no. of targets in a block
+# ps - no. of sources in a tile
+# q - no. of threads handling a single target (should be factor of ps)
+function gpu_vpm9!(s, t, pt, ps, num_cols, kernel)
+    t_size::Int32 = size(t, 2)
+    s_size::Int32 = size(s, 2)
+
+    ithread::Int32 = threadIdx().x
+
+    # Row and column indices of threads in a block
+    row::Int32 = (ithread-1i32) % pt + 1i32
+    col::Int32 = floor(Int32, (ithread-1i32)/pt) + 1i32
+
+    itarget::Int32 = row + (blockIdx().x-1i32)*pt
+    if itarget <= t_size
+        @inbounds tx = t[1i32, itarget]
+        @inbounds ty = t[2i32, itarget]
+        @inbounds tz = t[3i32, itarget]
+    end
+
+    n_tiles::Int32 = CUDA.ceil(Int32, s_size / ps)
+    bodies_per_col::Int32 = CUDA.ceil(Int32, ps / num_cols)
+
+    sh_mem = CuDynamicSharedArray(eltype(t), (7, ps))
+
+    # Variable initialization
+    UJ = @MVector zeros(eltype(t), 12)
+    out = @MVector zeros(eltype(t), 12)
+    idim::Int32 = 0
+    isource::Int32 = 0
+    i::Int32 = 0
+    shblk::Int32 = 0
+    n_shblks = CUDA.ceil(Int32, ps / blockDim().x)
+
+    itile::Int32 = 1
+    while itile <= n_tiles
+        # Each thread will copy source coordinates corresponding to its index into shared memory. This will be done for each tile.
+        shblk = 1
+        while shblk <= n_shblks
+            shmem_idx = ithread + (shblk-1i32)*blockDim().x
+            isource = shmem_idx + (itile-1i32)*ps
+            idim = 1
+            if shmem_idx <= ps
+                if isource <= s_size
+                    while idim <= 7
+                        @inbounds sh_mem[idim, shmem_idx] = s[idim, isource]
+                        idim += 1
+                    end
+                else
+                    while idim <= 7
+                        @inbounds sh_mem[idim, shmem_idx] = zero(eltype(s))
+                        idim += 1
+                    end
+                end
+            end
+            shblk += 1
+        end
+        sync_threads()
+
+        # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
+        i = 1
+        while i <= bodies_per_col
+            isource = i + bodies_per_col*(col-1)
+            if isource <= s_size
+                if itarget <= t_size
+                    out .= gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
+                end
+
+                # Sum up influences for each source in a tile
+                idim = 1
+                while idim <= 12
+                    @inbounds UJ[idim] += out[idim]
+                    idim += 1
+                end
+            end
+            i += 1
+        end
+        itile += 1
+        sync_threads()
+    end
+
+    # Sum up accelerations for each target/thread
+    # Each target will be accessed by q no. of threads
+    if itarget <= t_size
+        idim = 1
+        while idim <=3
+            @inbounds CUDA.@atomic t[9+idim, itarget] += UJ[idim]
+            idim += 1
+        end
+        idim = 4
+        while idim <= 12
+            @inbounds CUDA.@atomic t[12+idim, itarget] += UJ[idim]
+            idim += 1
+        end
+    end
+    return
+end
+
 
 function benchmark1_gpu!(s, t)
     s_d = CuArray(view(s, 1:7, :))
@@ -1040,6 +1142,25 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
     return
 end
 
+function benchmark9_gpu!(s, t, pt, ps, q; t_padding=0)
+    s_d = CuArray(view(s, 1:7, :))
+    t_d = CuArray(view(t, 1:24, :))
+
+    t_size = size(t, 2)+t_padding
+    kernel = gpu_g_dgdr
+
+    # Num of threads in a tile should always be 
+    # less than number of threads in a block (1024)
+    # or limited by memory size
+    threads::Int32 = pt*q
+    blocks::Int32 = cld(t_size, pt)
+    shmem = sizeof(eltype(s)) * 7 * ps  # XYZ + Γ123 + σ = 7 variables
+    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm9!(s_d, t_d, Int32(pt), Int32(ps), Int32(q), kernel)
+
+    t[10:12, :] .= Array(view(t_d, 10:12, :))
+    t[16:24, :] .= Array(view(t_d, 16:24, :))
+end
+
 function check_launch(n, p, q, max_threads_per_block=0; throw_error=false)
     if p > n; throw_error && error("p must be less than or equal to n"); return false; end
     if p*q >= max_threads_per_block; throw_error && error("p*q must be less than $max_threads_per_block"); return false; end
@@ -1050,7 +1171,7 @@ function check_launch(n, p, q, max_threads_per_block=0; throw_error=false)
     return true
 end
 
-function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max_threads_per_block=384, algorithm=3)
+function main(run_option; ns=2^5, nt=0, p=0, q=1, ps=0, debug=false, padding=true, max_threads_per_block=384, algorithm=3)
     T = Float64
 
     nt = nt==0 ? ns : nt
@@ -1089,6 +1210,9 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
                 CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
                                 t_padding=t_padding, max_threads_per_block=max_threads_per_block)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
+            elseif algorithm == 9
+                pt = p
+                @time benchmark9_gpu!(src2, trg2, pt, ps, q; t_padding=t_padding)
             else
                 @error "Invalid algorithm selected"
             end
@@ -1132,6 +1256,9 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
                 pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
                 CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices; t_padding=t_padding, max_threads_per_block=max_threads_per_block)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
+            elseif algorithm == 9
+                pt = p
+                CUDA.@profile benchmark9_gpu!(src2, trg2, pt, ps, q; t_padding=t_padding)
             else
                 @error "Invalid algorithm selected"
             end
@@ -1156,6 +1283,9 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, debug=false, padding=true, max
             pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
             t_gpu = @benchmark benchmark8_gpu!($pfield, $tidx_min, $tidx_max, $s_indices; t_padding=$t_padding, max_threads_per_block=$max_threads_per_block)
             trg2 .= view(pfield, :, 1:size(trg2, 2))
+        elseif algorithm == 9
+            pt = p
+            t_gpu = @benchmark benchmark9_gpu!($src2, $trg2, $pt, $ps, $q; t_padding=$t_padding)
         else
             @error "Invalid algorithm selected"
         end
@@ -1212,10 +1342,56 @@ function get_launch_config(nt; p_max=0, q_max=0, max_threads_per_block=384)
     return p, q
 end
 
+function get_launch_config(nt, ns; p_max=0, q_max=0, max_threads_per_block=384)
+    p_max = (p_max == 0) ? max_threads_per_block : p_max
+    q_max = (q_max == 0) ? p_max : q_max
+
+    divs_n = sort(divisors(nt))
+    p = 1
+    q = 1
+    ip = 1
+    for (i, div) in enumerate(divs_n)
+        if div <= p_max
+            p = div
+            ip = i
+        else
+            break
+        end
+    end
+
+    # Decision algorithm 1: Creates a matrix using indices and finds max of
+    # weighted sum of indices
+
+    i_weight = 0
+    j_weight = 1-i_weight
+
+    max_ij = i_weight*ip + j_weight*1
+    if nt <= 1<<13
+        isgood = true
+        for i in 1:ip
+            for j in 1:ip
+                isgood = check_launch(nt, divs_n[i], divs_n[j], max_threads_per_block)
+                if isgood && (divs_n[i] <= p_max)
+                    # Check if this is the max achievable ij value
+                    # in the p, q choice matrix
+                    obj_val = i_weight*i+j_weight*j
+                    if (obj_val >= max_ij) && (divs_n[j] <= q_max)
+                        max_ij = obj_val
+                        p = divs_n[i]
+                        q = divs_n[j]
+                    end
+                end
+            end
+        end
+    end
+
+    return pt, ps, q
+end
 # Run_option - # [1]test [2]profile [3]benchmark
 # for i in 5:17
 #     main(3; ns=2^i, algorithm=3)
 # end
 # main(3; ns=2^9, nt=2^12, debug=true)
 # main(1; ns=8739, nt=3884, debug=true)
-main(1; ns=2^9, algorithm=8)
+main(3; nt=2^6, ns=2^4, p=8, ps=4, q=4, algorithm=3)
+main(3; nt=2^6, ns=2^4, p=8, ps=4, q=4, algorithm=9)
