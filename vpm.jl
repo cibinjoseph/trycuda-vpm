@@ -887,6 +887,7 @@ function gpu_vpm9!(s, t, pt, ps, num_cols, kernel)
     isource::Int32 = 0
     i::Int32 = 0
     shblk::Int32 = 0
+    shmem_idx::Int32 = 0
     n_shblks = CUDA.ceil(Int32, ps / blockDim().x)
 
     itile::Int32 = 1
@@ -895,9 +896,9 @@ function gpu_vpm9!(s, t, pt, ps, num_cols, kernel)
         shblk = 1
         while shblk <= n_shblks
             shmem_idx = ithread + (shblk-1i32)*blockDim().x
-            isource = shmem_idx + (itile-1i32)*ps
             idim = 1
             if shmem_idx <= ps
+                isource = shmem_idx + (itile-1i32)*ps
                 if isource <= s_size
                     while idim <= 7
                         @inbounds sh_mem[idim, shmem_idx] = s[idim, isource]
@@ -1177,7 +1178,11 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, ps=0, debug=false, padding=tru
     nt = nt==0 ? ns : nt
 
     # Pad target array to nearest multiple of 32 for efficient p, q launch configuration
-    t_padding = (mod(nt, 32) == 0) ? 0 : 32*cld(nt, 32) - nt
+    t_padding = 0
+    if padding
+        t_padding = (mod(nt, 32) == 0) ? 0 : 32*cld(nt, 32) - nt
+    end
+
     if p == 0
         p, q = get_launch_config(nt+t_padding; max_threads_per_block=max_threads_per_block)
     end
@@ -1207,7 +1212,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, ps=0, debug=false, padding=tru
                 benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
             elseif algorithm == 8
                 pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-                CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
+                benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
                                 t_padding=t_padding, max_threads_per_block=max_threads_per_block)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             elseif algorithm == 9
@@ -1393,5 +1398,5 @@ end
 # end
 # main(3; ns=2^9, nt=2^12, debug=true)
 # main(1; ns=8739, nt=3884, debug=true)
-main(3; nt=2^6, ns=2^4, p=8, ps=4, q=4, algorithm=3)
-main(3; nt=2^6, ns=2^4, p=8, ps=4, q=4, algorithm=9)
+main(3; nt=7^1, ns=2^12, algorithm=3, padding=false)
+main(3; nt=7^1, ns=2^12, p=7, ps=512, q=32, algorithm=9, padding=false)
