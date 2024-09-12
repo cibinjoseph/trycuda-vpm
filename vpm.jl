@@ -225,7 +225,7 @@ end
 # Sources divided into multiple columns and influence is computed by multiple threads
 # p - no. of targets in a block
 # q - no. of threads handling a single target
-function gpu_vpm3!(s, t, p, num_cols, kernel)
+function gpu_vpm3!(s, t, p, q, kernel)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
 
@@ -243,7 +243,7 @@ function gpu_vpm3!(s, t, p, num_cols, kernel)
     end
 
     n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
-    bodies_per_col::Int32 = CUDA.ceil(Int32, p / num_cols)
+    bodies_per_col::Int32 = CUDA.ceil(Int32, p / q)
 
     sh_mem = CuDynamicSharedArray(eltype(t), (7, p))
 
@@ -314,7 +314,7 @@ function gpu_vpm3!(s, t, p, num_cols, kernel)
 end
 
 # High-storage parallel reduction
-function gpu_vpm4!(s, t, num_cols, gb_mem, kernel)
+function gpu_vpm4!(s, t, q, gb_mem, kernel)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
 
@@ -331,7 +331,7 @@ function gpu_vpm4!(s, t, num_cols, gb_mem, kernel)
     @inbounds tz = t[3, itarget]
 
     n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
-    bodies_per_col::Int32 = CUDA.ceil(Int32, p / num_cols)
+    bodies_per_col::Int32 = CUDA.ceil(Int32, p / q)
 
     sh_mem = CuDynamicSharedArray(eltype(t), (7, p))
 
@@ -386,7 +386,7 @@ function gpu_vpm4!(s, t, num_cols, gb_mem, kernel)
 
     # Sum up accelerations for each target/thread
     # Each target will be accessed by q no. of threads
-    if num_cols != 1
+    if q != 1
         # Perform write to global memory
         # Columns correspond to each of the q threads
         # sh_mem[1:12, 1] is the first target, sh_mem[13:24, 1] is the second target and so on.
@@ -451,7 +451,7 @@ end
 # Low-storage parallel reduction
 # - p is no. of targets per block. Typically same as no. of sources per block.
 # - q is no. of columns per tile
-function gpu_vpm5!(s, t, num_cols, kernel)
+function gpu_vpm5!(s, t, q, kernel)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
 
@@ -468,7 +468,7 @@ function gpu_vpm5!(s, t, num_cols, kernel)
     @inbounds tz = t[3, itarget]
 
     n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
-    bodies_per_col::Int32 = CUDA.ceil(Int32, p / num_cols)
+    bodies_per_col::Int32 = CUDA.ceil(Int32, p / q)
 
     sh_mem = CuDynamicSharedArray(eltype(t), (12, p))
 
@@ -524,7 +524,7 @@ function gpu_vpm5!(s, t, num_cols, kernel)
 
     # Sum up accelerations for each target/thread
     # Each target will be accessed by q no. of threads
-    if num_cols != 1
+    if q != 1
         # Perform write to shared memory
         # Columns correspond to each of the q threads
         # Iterate over targets and do reduction
@@ -542,9 +542,9 @@ function gpu_vpm5!(s, t, num_cols, kernel)
 
             # All p*q threads do parallel reduction on data
             stride::Int32 = 1
-            while stride < num_cols
+            while stride < q
                 i = (threadIdx().x-1)*stride*2+1
-                if i+stride <= num_cols
+                if i+stride <= q
                     idim = 1
                     while idim <= 12  # This can be parallelized too
                         @inbounds sh_mem[idim, i] += sh_mem[idim, i+stride]
@@ -590,7 +590,7 @@ end
 # Each thread handles a single target and uses local GPU memory
 # Sources divided into multiple columns and influence is computed by multiple threads
 # More sources into shared memory
-function gpu_vpm6!(s, t, p, num_cols, kernel)
+function gpu_vpm6!(s, t, p, q, kernel)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
 
@@ -607,10 +607,10 @@ function gpu_vpm6!(s, t, p, num_cols, kernel)
         @inbounds tz = t[3, itarget]
     end
 
-    n_tiles::Int32 = CUDA.ceil(Int32, s_size / (p*num_cols))
+    n_tiles::Int32 = CUDA.ceil(Int32, s_size / (p*q))
     bodies_per_col::Int32 = p
 
-    sh_mem = CuDynamicSharedArray(eltype(t), (7, p*num_cols))
+    sh_mem = CuDynamicSharedArray(eltype(t), (7, p*q))
 
     # Variable initialization
     UJ = @MVector zeros(eltype(t), 12)
@@ -623,7 +623,7 @@ function gpu_vpm6!(s, t, p, num_cols, kernel)
     itile::Int32 = 1
     while itile <= n_tiles
         # Each thread will copy source coordinates corresponding to its index into shared memory. This will be done for each tile.
-        idx = ithread + (itile-1)*p*num_cols
+        idx = ithread + (itile-1)*p*q
         idim = 1
         if idx <= s_size
             while idim <= 7
@@ -680,7 +680,7 @@ end
 
 # Each thread handles a single target and uses local GPU memory
 # Sources divided into multiple columns and influence is computed by multiple threads
-function gpu_vpm7!(s, t, p, num_cols, kernel)
+function gpu_vpm7!(s, t, p, q, kernel)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
 
@@ -698,7 +698,7 @@ function gpu_vpm7!(s, t, p, num_cols, kernel)
     end
 
     n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
-    bodies_per_col::Int32 = CUDA.ceil(Int32, p / num_cols)
+    bodies_per_col::Int32 = CUDA.ceil(Int32, p / q)
 
     sh_mem = CuDynamicSharedArray(eltype(t), (7, p))
 
@@ -764,7 +764,7 @@ end
 # Each thread handles a single target and uses local GPU memory
 # Sources divided into multiple columns and influence is computed by multiple threads
 function gpu_vpm8!(pfield, tidx_min, tidx_max, s_indices,
-        tidx_offset, sidx_offset, p, num_cols, kernel)
+        tidx_offset, sidx_offset, p, q, kernel)
 
     t_size::Int32 = tidx_max - tidx_min + 1
     s_size::Int32 = length(s_indices)
@@ -783,7 +783,7 @@ function gpu_vpm8!(pfield, tidx_min, tidx_max, s_indices,
     end
 
     n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
-    bodies_per_col::Int32 = CUDA.ceil(Int32, p / num_cols)
+    bodies_per_col::Int32 = CUDA.ceil(Int32, p / q)
 
     sh_mem = CuDynamicSharedArray(eltype(pfield), (7, p))
 
@@ -855,30 +855,30 @@ end
 
 # Each thread handles a single target and uses local GPU memory
 # Sources divided into multiple columns and influence is computed by multiple threads
-# pt - no. of targets in a block
-# ps - no. of sources in a tile
-# q - no. of threads handling a single target (should be factor of ps)
-function gpu_vpm9!(s, t, pt, ps, num_cols, kernel)
+# p - no. of targets in a block
+# q - no. of threads handling a single target (should be factor of r)
+# r - no. of sources in a tile
+function gpu_vpm9!(s, t, p, q, r, kernel)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
 
     ithread::Int32 = threadIdx().x
 
     # Row and column indices of threads in a block
-    row::Int32 = (ithread-1i32) % pt + 1i32
-    col::Int32 = floor(Int32, (ithread-1i32)/pt) + 1i32
+    row::Int32 = (ithread-1i32) % p + 1i32
+    col::Int32 = floor(Int32, (ithread-1i32)/p) + 1i32
 
-    itarget::Int32 = row + (blockIdx().x-1i32)*pt
+    itarget::Int32 = row + (blockIdx().x-1i32)*p
     if itarget <= t_size
         @inbounds tx = t[1i32, itarget]
         @inbounds ty = t[2i32, itarget]
         @inbounds tz = t[3i32, itarget]
     end
 
-    n_tiles::Int32 = CUDA.ceil(Int32, s_size / ps)
-    bodies_per_col::Int32 = CUDA.ceil(Int32, ps / num_cols)
+    n_tiles::Int32 = CUDA.ceil(Int32, s_size / r)
+    bodies_per_col::Int32 = CUDA.ceil(Int32, r / q)
 
-    sh_mem = CuDynamicSharedArray(eltype(t), (7, ps))
+    sh_mem = CuDynamicSharedArray(eltype(t), (7, r))
 
     # Variable initialization
     UJ = @MVector zeros(eltype(t), 12)
@@ -888,7 +888,7 @@ function gpu_vpm9!(s, t, pt, ps, num_cols, kernel)
     i::Int32 = 0
     shblk::Int32 = 0
     shmem_idx::Int32 = 0
-    n_shblks = CUDA.ceil(Int32, ps / blockDim().x)
+    n_shblks = CUDA.ceil(Int32, r / blockDim().x)
 
     itile::Int32 = 1
     while itile <= n_tiles
@@ -897,8 +897,8 @@ function gpu_vpm9!(s, t, pt, ps, num_cols, kernel)
         while shblk <= n_shblks
             shmem_idx = ithread + (shblk-1i32)*blockDim().x
             idim = 1
-            if shmem_idx <= ps
-                isource = shmem_idx + (itile-1i32)*ps
+            if shmem_idx <= r
+                isource = shmem_idx + (itile-1i32)*r
                 if isource <= s_size
                     while idim <= 7
                         @inbounds sh_mem[idim, shmem_idx] = s[idim, isource]
@@ -1143,7 +1143,7 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
     return
 end
 
-function benchmark9_gpu!(s, t, pt, ps, q; t_padding=0)
+function benchmark9_gpu!(s, t, p, q, r; t_padding=0)
     s_d = CuArray(view(s, 1:7, :))
     t_d = CuArray(view(t, 1:24, :))
 
@@ -1153,10 +1153,10 @@ function benchmark9_gpu!(s, t, pt, ps, q; t_padding=0)
     # Num of threads in a tile should always be 
     # less than number of threads in a block (1024)
     # or limited by memory size
-    threads::Int32 = pt*q
-    blocks::Int32 = cld(t_size, pt)
-    shmem = sizeof(eltype(s)) * 7 * ps  # XYZ + Γ123 + σ = 7 variables
-    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm9!(s_d, t_d, Int32(pt), Int32(ps), Int32(q), kernel)
+    threads::Int32 = p*q
+    blocks::Int32 = cld(t_size, p)
+    shmem = sizeof(eltype(s)) * 7 * r  # XYZ + Γ123 + σ = 7 variables
+    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm9!(s_d, t_d, Int32(p), Int32(r), Int32(q), kernel)
 
     t[10:12, :] .= Array(view(t_d, 10:12, :))
     t[16:24, :] .= Array(view(t_d, 16:24, :))
@@ -1172,7 +1172,7 @@ function check_launch(n, p, q, max_threads_per_block=0; throw_error=false)
     return true
 end
 
-function main(run_option; ns=2^5, nt=0, p=0, q=1, ps=0, debug=false, padding=true, max_threads_per_block=384, algorithm=3)
+function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true, max_threads_per_block=384, algorithm=3)
     T = Float64
 
     nt = nt==0 ? ns : nt
@@ -1216,8 +1216,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, ps=0, debug=false, padding=tru
                                 t_padding=t_padding, max_threads_per_block=max_threads_per_block)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             elseif algorithm == 9
-                pt = p
-                @time benchmark9_gpu!(src2, trg2, pt, ps, q; t_padding=t_padding)
+                @time benchmark9_gpu!(src2, trg2, p, q, r; t_padding=t_padding)
             else
                 @error "Invalid algorithm selected"
             end
@@ -1262,8 +1261,8 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, ps=0, debug=false, padding=tru
                 CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices; t_padding=t_padding, max_threads_per_block=max_threads_per_block)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             elseif algorithm == 9
-                pt = p
-                CUDA.@profile benchmark9_gpu!(src2, trg2, pt, ps, q; t_padding=t_padding)
+                p = p
+                CUDA.@profile benchmark9_gpu!(src2, trg2, p, q, r; t_padding=t_padding)
             else
                 @error "Invalid algorithm selected"
             end
@@ -1289,8 +1288,8 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, ps=0, debug=false, padding=tru
             t_gpu = @benchmark benchmark8_gpu!($pfield, $tidx_min, $tidx_max, $s_indices; t_padding=$t_padding, max_threads_per_block=$max_threads_per_block)
             trg2 .= view(pfield, :, 1:size(trg2, 2))
         elseif algorithm == 9
-            pt = p
-            t_gpu = @benchmark benchmark9_gpu!($src2, $trg2, $pt, $ps, $q; t_padding=$t_padding)
+            p = p
+            t_gpu = @benchmark benchmark9_gpu!($src2, $trg2, $p, $r, $q; t_padding=$t_padding)
         else
             @error "Invalid algorithm selected"
         end
@@ -1390,7 +1389,7 @@ function get_launch_config(nt, ns; p_max=0, q_max=0, max_threads_per_block=384)
         end
     end
 
-    return pt, ps, q
+    return p, q, r
 end
 # Run_option - # [1]test [2]profile [3]benchmark
 # for i in 5:17
@@ -1399,4 +1398,4 @@ end
 # main(3; ns=2^9, nt=2^12, debug=true)
 # main(1; ns=8739, nt=3884, debug=true)
 main(3; nt=7^1, ns=2^12, algorithm=3, padding=false)
-main(3; nt=7^1, ns=2^12, p=7, ps=512, q=32, algorithm=9, padding=false)
+main(3; nt=7^1, ns=2^12, p=7, q=32, r=512, algorithm=9, padding=false)
