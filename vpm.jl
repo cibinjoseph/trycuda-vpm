@@ -226,23 +226,14 @@ end
 # p - no. of targets in a block
 # q - no. of threads handling a single target
 function gpu_vpm3!(s, t, p, q, kernel)
-    t_size::Int32 = size(t, 2)
-    s_size::Int32 = size(s, 2)
-
-    ithread::Int32 = threadIdx().x
 
     # Row and column indices of threads in a block
-    row::Int32 = (ithread-1i32) % p + 1i32
-    col::Int32 = floor(Int32, (ithread-1i32)/p) + 1i32
+    row::Int32 = (threadIdx().x-1i32) % p + 1i32
+    col::Int32 = floor(Int32, (threadIdx().x-1i32)/p) + 1i32
 
     itarget::Int32 = row + (blockIdx().x-1i32)*p
-    if itarget <= t_size
-        @inbounds tx = t[1, itarget]
-        @inbounds ty = t[2, itarget]
-        @inbounds tz = t[3, itarget]
-    end
 
-    n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
+    n_tiles::Int32 = CUDA.ceil(Int32, size(s, 2) / p)
     bodies_per_col::Int32 = CUDA.ceil(Int32, p / q)
 
     sh_mem = CuDynamicSharedArray(eltype(t), (7, p))
@@ -260,15 +251,15 @@ function gpu_vpm3!(s, t, p, q, kernel)
         if (col == 1i32)
             isource = row + (itile-1i32)*p
             idim = 1
-            if isource <= s_size
-                while idim <= 7
+            if isource <= size(s, 2)
+                while idim <= 7i32
                     @inbounds sh_mem[idim, row] = s[idim, isource]
-                    idim += 1
+                    idim += 1i32
                 end
             else
-                while idim <= 7
+                while idim <= 7i32
                     @inbounds sh_mem[idim, row] = zero(eltype(s))
-                    idim += 1
+                    idim += 1i32
                 end
             end
         end
@@ -278,36 +269,38 @@ function gpu_vpm3!(s, t, p, q, kernel)
         i = 1
         while i <= bodies_per_col
             isource = i + bodies_per_col*(col-1)
-            if isource <= s_size
-                if itarget <= t_size
-                    out .= gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
+            if isource <= size(s, 2)
+                if itarget <= size(t, 2)
+                    @inbounds out .= gpu_interaction(t[1, itarget],
+                                                     t[2, itarget],
+                                                     t[3, itarget], sh_mem, isource, kernel)
                 end
 
                 # Sum up influences for each source in a tile
                 idim = 1
-                while idim <= 12
+                while idim <= 12i32
                     @inbounds UJ[idim] += out[idim]
-                    idim += 1
+                    idim += 1i32
                 end
             end
-            i += 1
+            i += 1i32
         end
-        itile += 1
+        itile += 1i32
         sync_threads()
     end
 
     # Sum up accelerations for each target/thread
     # Each target will be accessed by q no. of threads
-    if itarget <= t_size
+    if itarget <= size(t, 2)
         idim = 1
-        while idim <=3
+        while idim <= 3i32
             @inbounds CUDA.@atomic t[9+idim, itarget] += UJ[idim]
-            idim += 1
+            idim += 1i32
         end
         idim = 4
-        while idim <= 12
+        while idim <= 12i32
             @inbounds CUDA.@atomic t[12+idim, itarget] += UJ[idim]
-            idim += 1
+            idim += 1i32
         end
     end
     return
@@ -974,6 +967,7 @@ function benchmark3_gpu!(s, t, p, q; t_padding=0)
     s_d = CuArray(view(s, 1:7, :))
     t_d = CuArray(view(t, 1:24, :))
 
+    s_size = size(s, 2)
     t_size = size(t, 2)+t_padding
     kernel = gpu_g_dgdr
 
@@ -983,7 +977,8 @@ function benchmark3_gpu!(s, t, p, q; t_padding=0)
     threads::Int32 = p*q
     blocks::Int32 = cld(t_size, p)
     shmem = sizeof(eltype(s)) * 7 * p  # XYZ + Γ123 + σ = 7 variables
-    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm3!(s_d, t_d, Int32(p), Int32(q), kernel)
+    fh = open("code.ptx", "w")
+    @device_code_ptx io=fh @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm3!(s_d, t_d, Int32(p), Int32(q), kernel)
 
     t[10:12, :] .= Array(view(t_d, 10:12, :))
     t[16:24, :] .= Array(view(t_d, 16:24, :))
@@ -1415,5 +1410,5 @@ end
 # end
 # main(3; ns=2^9, nt=2^12, debug=true)
 # main(1; ns=8739, nt=3884, debug=true)
-main(3; nt=7^1, ns=2^12, algorithm=3, padding=false)
-main(3; nt=7^1, ns=2^12, p=7, q=32, r=512, algorithm=9, padding=false)
+main(1; nt=2^9, ns=2^12, algorithm=3, padding=false)
+# main(3; nt=7^1, ns=2^12, p=7, q=32, r=512, algorithm=9, padding=false)
