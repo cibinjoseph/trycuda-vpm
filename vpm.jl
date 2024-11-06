@@ -89,52 +89,54 @@ end
     @inbounds dX1 = tx - s[1, j]
     @inbounds dX2 = ty - s[2, j]
     @inbounds dX3 = tz - s[3, j]
-    r2 = dX1*dX1 + dX2*dX2 + dX3*dX3
+    r2 = dX1^2 + dX2^2 + dX3^2
     r = sqrt(r2)
-    r3 = r*r2
 
-    # Mapping to variables
-    @inbounds gam1 = s[4, j]
-    @inbounds gam2 = s[5, j]
-    @inbounds gam3 = s[6, j]
     @inbounds sigma = s[7, j]
 
     UJ = @MVector zeros(T, 12)
 
     if r2 > T(eps2) && abs(sigma) > T(eps2)
+        # Mapping to variables
+        c4 = -T(const4)/(r*r2)
+        @inbounds gam1 = c4 * s[4, j]
+        @inbounds gam2 = c4 * s[5, j]
+        @inbounds gam3 = c4 * s[6, j]
+
         # Regularizing function and deriv
         # g_sgm = g_val(r/sigma)
         # dg_sgmdr = dg_val(r/sigma)
         g_sgm, dg_sgmdr = kernel(r/sigma)
 
-        # K × Γp
-        crss1 = -T(const4) / r3 * ( dX2*gam3 - dX3*gam2 )
-        crss2 = -T(const4) / r3 * ( dX3*gam1 - dX1*gam3 )
-        crss3 = -T(const4) / r3 * ( dX1*gam2 - dX2*gam1 )
-
-        # U = ∑g_σ(x-xp) * K(x-xp) × Γp
-        @inbounds UJ[1] = g_sgm * crss1
-        @inbounds UJ[2] = g_sgm * crss2
-        @inbounds UJ[3] = g_sgm * crss3
-
         # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
         # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
         aux = dg_sgmdr/(sigma*r) - 3*g_sgm /r2
+
+        # K × Γp
+        # Cross product is assigned to UJ initially and over-written later
+        @inbounds UJ[1] = dX2*gam3 - dX3*gam2
+        @inbounds UJ[2] = dX3*gam1 - dX1*gam3
+        @inbounds UJ[3] = dX1*gam2 - dX2*gam1
+
         # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
         # Adds the Kronecker delta term
-        aux2 = -T(const4) * g_sgm / r3
         # j=1
-        @inbounds UJ[4] = aux * crss1 * dX1
-        @inbounds UJ[5] = aux * crss2 * dX1 - aux2 * gam3
-        @inbounds UJ[6] = aux * crss3 * dX1 + aux2 * gam2
+        @inbounds UJ[4] = aux * UJ[1] * dX1
+        @inbounds UJ[5] = aux * UJ[2] * dX1 - g_sgm * gam3
+        @inbounds UJ[6] = aux * UJ[3] * dX1 + g_sgm * gam2
         # j=2
-        @inbounds UJ[7] = aux * crss1 * dX2 + aux2 * gam3
-        @inbounds UJ[8] = aux * crss2 * dX2
-        @inbounds UJ[9] = aux * crss3 * dX2 - aux2 * gam1
+        @inbounds UJ[7] = aux * UJ[1] * dX2 + g_sgm * gam3
+        @inbounds UJ[8] = aux * UJ[2] * dX2
+        @inbounds UJ[9] = aux * UJ[3] * dX2 - g_sgm * gam1
         # j=3
-        @inbounds UJ[10] = aux * crss1 * dX3 - aux2 * gam2
-        @inbounds UJ[11] = aux * crss2 * dX3 + aux2 * gam1
-        @inbounds UJ[12] = aux * crss3 * dX3
+        @inbounds UJ[10] = aux * UJ[1] * dX3 - g_sgm * gam2
+        @inbounds UJ[11] = aux * UJ[2] * dX3 + g_sgm * gam1
+        @inbounds UJ[12] = aux * UJ[3] * dX3
+
+        # U = ∑g_σ(x-xp) * K(x-xp) × Γp
+        @inbounds UJ[1] *= g_sgm
+        @inbounds UJ[2] *= g_sgm
+        @inbounds UJ[3] *= g_sgm
     end
 
     return UJ
@@ -673,6 +675,7 @@ end
 
 # Each thread handles a single target and uses local GPU memory
 # Sources divided into multiple columns and influence is computed by multiple threads
+# Uses in-place interaction kernel gpu_interaction!()
 function gpu_vpm7!(s, t, p, q, kernel)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
@@ -1270,6 +1273,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
 
         if algorithm == 3
             t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
+            @show median(t_gpu.times)
         elseif algorithm == 4
             t_gpu = @benchmark benchmark4_gpu!($src2, $trg2, $p, $q)
         elseif algorithm == 5
@@ -1408,7 +1412,7 @@ end
 # for i in 5:17
 #     main(3; ns=2^i, algorithm=3)
 # end
-# main(3; ns=2^9, nt=2^12, debug=true)
+main(3; ns=2^13, debug=false, algorithm=3)
 # main(1; ns=8739, nt=3884, debug=true)
-main(1; nt=2^9, ns=2^12, algorithm=3, padding=false)
+# main(1; nt=2^9, ns=2^12, algorithm=3, padding=false)
 # main(3; nt=7^1, ns=2^12, p=7, q=32, r=512, algorithm=9, padding=false)
