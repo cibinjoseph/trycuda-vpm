@@ -202,6 +202,66 @@ end
     return
 end
 
+@inline function gpu_interaction_layout!(UJ, tx, ty, tz, s, j, kernel)
+    T = eltype(s)
+    @inbounds dX1 = tx - s[j, 1i32]
+    @inbounds dX2 = ty - s[j, 2i32]
+    @inbounds dX3 = tz - s[j, 3i32]
+    r2 = dX1^2 + dX2^2 + dX3^2
+    r = sqrt(r2)
+
+    @inbounds sigma = s[j, 7i32]
+
+    if r2 > T(eps2) && abs(sigma) > T(eps2)
+        # Mapping to variables
+        c4 = -T(const4)/(r*r2)
+        @inbounds gam1 = c4 * s[j, 4i32]
+        @inbounds gam2 = c4 * s[j, 5i32]
+        @inbounds gam3 = c4 * s[j, 6i32]
+
+        # Regularizing function and deriv
+        # g_sgm = g_val(r/sigma)
+        # dg_sgmdr = dg_val(r/sigma)
+        g_sgm, dg_sgmdr = kernel(r/sigma)
+
+        # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
+        # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
+        aux = dg_sgmdr/(sigma*r) - 3*g_sgm /r2
+
+        # K × Γp
+        # Cross product is assigned to UJ initially and over-written later
+        crss1 = dX2*gam3 - dX3*gam2
+        crss2 = dX3*gam1 - dX1*gam3
+        crss3 = dX1*gam2 - dX2*gam1
+
+        # U = ∑g_σ(x-xp) * K(x-xp) × Γp
+        @inbounds UJ[1i32] += crss1 * g_sgm
+        @inbounds UJ[2i32] += crss2 * g_sgm
+        @inbounds UJ[3i32] += crss3 * g_sgm
+
+        @inbounds gam1 *= g_sgm
+        @inbounds gam2 *= g_sgm
+        @inbounds gam3 *= g_sgm
+
+        # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
+        # Adds the Kronecker delta term
+        # j=1
+        @inbounds UJ[4i32] += aux * crss1 * dX1
+        @inbounds UJ[5i32] += aux * crss2 * dX1 - gam3
+        @inbounds UJ[6i32] += aux * crss3 * dX1 + gam2
+        # j=2
+        @inbounds UJ[7i32] += aux * crss1 * dX2 + gam3
+        @inbounds UJ[8i32] += aux * crss2 * dX2
+        @inbounds UJ[9i32] += aux * crss3 * dX2 - gam1
+        # j=3
+        @inbounds UJ[10i32] += aux * crss1 * dX3 - gam2
+        @inbounds UJ[11i32] += aux * crss2 * dX3 + gam1
+        @inbounds UJ[12i32] += aux * crss3 * dX3
+    end
+
+    return
+end
+
 function cpu_vpm!(s, t)
     for i in 1:size(t, 2)
         for j in 1:size(s, 2)
@@ -956,6 +1016,99 @@ function gpu_vpm9!(s, t, p, q, r, kernel)
     return
 end
 
+# Each thread handles a single target and uses local GPU memory
+# Sources divided into multiple columns and influence is computed by multiple threads
+# Uses in-place interaction kernel gpu_interaction!()
+# Same as gpu_vpm7, but switch shared memory indices to check array layout
+function gpu_vpm10!(s, t, p, q, kernel)
+    t_size::Int32 = size(t, 2)
+    s_size::Int32 = size(s, 2)
+
+    ithread::Int32 = threadIdx().x
+
+    # Row and column indices of threads in a block
+    row::Int32 = (ithread-1i32) % p + 1i32
+    col::Int32 = floor(Int32, (ithread-1i32)/p) + 1i32
+
+    itarget::Int32 = row + (blockIdx().x-1i32)*p
+    if itarget <= t_size
+        @inbounds tx = t[1i32, itarget]
+        @inbounds ty = t[2i32, itarget]
+        @inbounds tz = t[3i32, itarget]
+    end
+
+    n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
+    bodies_per_col::Int32 = CUDA.ceil(Int32, p / q)
+
+    sh_mem = CuDynamicSharedArray(eltype(t), (p, 8))
+
+    # Variable initialization
+    UJ = @MVector zeros(eltype(t), 12)
+    idim::Int32 = 0
+    isource::Int32 = 0
+    i::Int32 = 0
+
+    itile::Int32 = 1
+    while itile <= n_tiles
+        # Each thread will copy source coordinates corresponding to its index into shared memory. This will be done for each tile.
+        if (col == 1i32)
+            isource = row + (itile-1i32)*p
+            idim = 1i32
+            if isource <= s_size
+                while idim <= 7i32
+                    @inbounds sh_mem[row, idim] = s[idim, isource]
+                    idim += 1i32
+                end
+                @inbounds sh_mem[row, 8i32] = zero(eltype(s))
+            else
+                while idim <= 8i32
+                    @inbounds sh_mem[row, idim] = zero(eltype(s))
+                    idim += 1i32
+                end
+            end
+        end
+        sync_threads()
+
+        # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
+        i = 1i32
+        while i <= bodies_per_col
+            isource = i + bodies_per_col*(col-1i32)
+            if isource <= s_size
+                if itarget <= t_size
+                    gpu_interaction_layout!(UJ, tx, ty, tz, sh_mem, isource, kernel)
+                end
+            end
+            i += 1i32
+        end
+        itile += 1i32
+        sync_threads()
+    end
+
+    # Sum up accelerations for each target/thread
+    # Each target will be accessed by q no. of threads
+    if itarget <= t_size
+        idim = 1i32
+        while idim <= 3i32
+            @inbounds CUDA.@atomic sh_mem[row, 8i32] += UJ[idim]
+            sync_threads()
+            if (col == 1i32)
+                @inbounds t[9i32+idim, itarget] += sh_mem[row, 8i32]
+            end
+            idim += 1i32
+        end
+        idim = 4i32
+        while idim <= 12i32
+            @inbounds CUDA.@atomic sh_mem[row, 8i32] += UJ[idim]
+            sync_threads()
+            if (col == 1i32)
+                @inbounds t[12i32+idim, itarget] += sh_mem[row, 8i32]
+            end
+            idim += 1i32
+        end
+    end
+    return
+end
+
 
 function benchmark1_gpu!(s, t)
     s_d = CuArray(view(s, 1:7, :))
@@ -1176,6 +1329,25 @@ function check_launch(n, p, q, max_threads_per_block=0; throw_error=false)
     return true
 end
 
+function benchmark10_gpu!(s, t, p, q; t_padding=0)
+    s_d = CuArray(view(s, 1:7, :))
+    t_d = CuArray(view(t, 1:24, :))
+
+    t_size = size(t, 2)+t_padding
+    kernel = gpu_g_dgdr
+
+    # Num of threads in a tile should always be 
+    # less than number of threads in a block (1024)
+    # or limited by memory size
+    threads::Int32 = p*q
+    blocks::Int32 = cld(t_size, p)
+    shmem = sizeof(eltype(s)) * 8 * p  # XYZ + Γ123 + σ = 7 variables
+    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm10!(s_d, t_d, Int32(p), Int32(q), kernel)
+
+    t[10:12, :] .= Array(view(t_d, 10:12, :))
+    t[16:24, :] .= Array(view(t_d, 16:24, :))
+end
+
 function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true, max_threads_per_block=384, algorithm=3)
     T = Float64
 
@@ -1295,6 +1467,8 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
         elseif algorithm == 9
             p = p
             t_gpu = @benchmark benchmark9_gpu!($src2, $trg2, $p, $r, $q; t_padding=$t_padding)
+        elseif algorithm == 10
+            t_gpu = @benchmark benchmark10_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
         else
             @error "Invalid algorithm selected"
         end
@@ -1418,7 +1592,7 @@ end
 # for i in 5:17
 #     main(3; ns=2^i, algorithm=3)
 # end
-main(3; ns=2^13, debug=false, algorithm=7)
+main(3; ns=2^13, debug=false, algorithm=10)
 # main(1; ns=8739, nt=3884, debug=true)
 # main(1; nt=2^9, ns=2^12, algorithm=3, padding=false)
 # main(3; nt=7^1, ns=2^12, p=7, q=32, r=512, algorithm=9, padding=false)
