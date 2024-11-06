@@ -130,7 +130,7 @@ function my_erf32(x)
     xabs = abs(x)
     sgn = sign(x)
     oneval = one(x)
-    val = sgn * one(x)
+    val = sgn * oneval
 
     if xabs < 0.84375f0
         z = x*x
@@ -165,7 +165,7 @@ function my_erf64(x)
     xabs = abs(x)
     sgn = sign(x)
     oneval = one(x)
-    val = sgn * one(x)
+    val = sgn * oneval
 
     if xabs < 0.84375
         z = x*x
