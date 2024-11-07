@@ -104,13 +104,11 @@ end
         @inbounds gam3 = c4 * s[6, j]
 
         # Regularizing function and deriv
-        # g_sgm = g_val(r/sigma)
-        # dg_sgmdr = dg_val(r/sigma)
         g_sgm, dg_sgmdr = kernel(r/sigma)
 
         # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
         # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
-        aux = dg_sgmdr/(sigma*r) - 3*g_sgm /r2
+        aux = dg_sgmdr/(sigma*r) - 3*g_sgm/r2
 
         # K × Γp
         # Cross product is assigned to UJ initially and over-written later
@@ -226,7 +224,7 @@ end
 
         # ∂u∂xj(x) = ∑[ ∂gσ∂xj(x−xp) * K(x−xp)×Γp + gσ(x−xp) * ∂K∂xj(x−xp)×Γp ]
         # ∂u∂xj(x) = ∑p[(Δxj∂gσ∂r/(σr) − 3Δxjgσ/r^2) K(Δx)×Γp
-        aux = dg_sgmdr/(sigma*r) - 3*g_sgm /r2
+        aux = dg_sgmdr/(sigma*r) - 3*g_sgm/r2
 
         # K × Γp
         # Cross product is assigned to UJ initially and over-written later
@@ -1393,6 +1391,8 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             elseif algorithm == 9
                 @time benchmark9_gpu!(src2, trg2, p, q, r; t_padding=t_padding)
+            elseif algorithm == 10
+                benchmark10_gpu!(src2, trg2, p, q; t_padding=t_padding)
             else
                 @error "Invalid algorithm selected"
             end
@@ -1439,6 +1439,8 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             elseif algorithm == 9
                 p = p
                 CUDA.@profile benchmark9_gpu!(src2, trg2, p, q, r; t_padding=t_padding)
+            elseif algorithm == 10
+                CUDA.@profile benchmark10_gpu!(src2, trg2, p, q; t_padding=t_padding)
             else
                 @error "Invalid algorithm selected"
             end
@@ -1446,7 +1448,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
     else
         check_launch(nt+t_padding, p, q, max_threads_per_block)
 
-        src, trg, src2, trg2 = get_inputs(ns, nfields)
+        src, trg, src2, trg2 = get_inputs(ns, nfields; T=T)
         t_cpu = @benchmark cpu_vpm!($src, $trg)
 
         if algorithm == 3

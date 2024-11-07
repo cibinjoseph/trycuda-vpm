@@ -204,10 +204,11 @@ my_erf(x::ForwardDiff.Dual{<:Any, Float32, <:Any}) = my_erf32(x)
 
 # CPU
 const const2 = sqrt(2/pi)
-const sqr2 = sqrt(2)
+const invsqr2 = 1/sqrt(2)
+
 function cpu_g_dgdr(r::T) where T
     aux::T = T(const2)*r*exp(-r^2/2)
-    g::T = SpecialFunctions.erf(r/T(sqr2))-aux
+    g::T = SpecialFunctions.erf(r*T(invsqr2))-aux
     dg::T = r*aux
     return g, dg
 end
@@ -249,9 +250,9 @@ end
 @inline Cuerf(x::Float32) = ccall("extern __nv_erff", llvmcall, Cfloat, (Cfloat,), x)
 
 
-function gpu_g_dgdr(r)
-    aux = const2*r*exp(-r^2/2)
-    return my_erf(r/sqr2)-aux, r*aux
+function gpu_g_dgdr(r::T) where T
+    aux::T = T(const2)*r*exp(-0.5*r^2)
+    return my_erf(r*T(invsqr2))-aux, r*aux
 end
 
 # n = 2^3
