@@ -1594,7 +1594,7 @@ end
 # for i in 5:17
 #     main(3; ns=2^i, algorithm=3)
 # end
-main(3; ns=2^13, debug=false, algorithm=10)
+main(3; ns=2^13, debug=false, algorithm=7)
 # main(1; ns=8739, nt=3884, debug=true)
 # main(1; nt=2^9, ns=2^12, algorithm=3, padding=false)
 # main(3; nt=7^1, ns=2^12, p=7, q=32, r=512, algorithm=9, padding=false)
