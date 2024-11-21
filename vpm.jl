@@ -1159,16 +1159,16 @@ function prep8_gpu!(s, t)
 end
 
 function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
-        t_padding=0, max_threads_per_block=0)
+        padding=true, max_threads_per_block=0)
 
     pfield_d = CuArray(view(pfield, 1:24, :))
     s_indices_d = CuArray(s_indices)
 
-    t_size::Int32 = tidx_max-tidx_min+1+t_padding
+    t_size::Int32 = tidx_max-tidx_min+1
     tidx_offset::Int32 = 0 
     sidx_offset::Int32 = 0 
     kernel = gpu_g_dgdr
-    nstreams = 4
+    nstreams = 5
     nstreams_range = nstreams:-1:1
 
     nt_remaining = t_size
@@ -1188,11 +1188,16 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
         step = cld(nt_remaining, i)
         istop += step-1
 
+        # Compute padding if necessary
+        t_padding = 0
+        if padding
+            t_padding = (mod(step, 32) == 0) ? 0 : 32*cld(step, 32) - step
+        end
+
         # Kernel launch config
-        p[i], q[i] = get_launch_config(step; q_max=4, max_threads_per_block=max_threads_per_block)
-        # i == 1 && @show step, p[i], q[i]
+        p[i], q[i] = get_launch_config(step+t_padding; q_max=0, max_threads_per_block=max_threads_per_block)
         threads[i] = p[i]*q[i]
-        blocks[i] = cld(step, p[i])
+        blocks[i] = cld(step+t_padding, p[i])
 
         t_start[i] = istart
         t_stop[i] = istop
@@ -1314,7 +1319,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             elseif algorithm == 8
                 pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
                 benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
-                                t_padding=t_padding, max_threads_per_block=max_threads_per_block)
+                                padding=padding, max_threads_per_block=max_threads_per_block)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             elseif algorithm == 9
                 @time benchmark9_gpu!(src2, trg2, p, q, r; t_padding=t_padding)
@@ -1521,7 +1526,7 @@ end
 # for i in 5:17
 #     main(3; ns=2^i, algorithm=3)
 # end
-main(3; ns=2^15, debug=false, algorithm=7)
+main(3; ns=2^15, debug=false, algorithm=8)
 # main(1; ns=8739, nt=3884, debug=true)
 # main(1; nt=2^9, ns=2^12, algorithm=3, padding=false)
 # main(3; nt=7^1, ns=2^12, p=7, q=32, r=512, algorithm=9, padding=false)
