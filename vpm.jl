@@ -1242,7 +1242,7 @@ function benchmark9_gpu!(s, t, p, q, r; t_padding=0)
     threads::Int32 = p*q
     blocks::Int32 = cld(t_size, p)
     shmem = sizeof(eltype(s)) * 7 * r  # XYZ + Γ123 + σ = 7 variables
-    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm9!(s_d, t_d, Int32(p), Int32(r), Int32(q), kernel)
+    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm9!(s_d, t_d, Int32(p), Int32(q), Int32(r), kernel)
 
     t[10:12, :] .= Array(view(t_d, 10:12, :))
     t[16:24, :] .= Array(view(t_d, 16:24, :))
