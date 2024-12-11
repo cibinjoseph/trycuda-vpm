@@ -1290,7 +1290,11 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
     end
 
     if p == 0
-        p, q = get_launch_config(nt+t_padding; max_threads_per_block=max_threads_per_block)
+        if algorithm == 9
+            p, q = get_launch_config(nt+t_padding, ns; max_threads_per_block=max_threads_per_block)
+        else
+            p, q = get_launch_config(nt+t_padding; max_threads_per_block=max_threads_per_block)
+        end
     end
     if run_option == 1 || run_option == 2
         println("No. of sources: $ns")
@@ -1307,7 +1311,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
 
             println("GPU Run")
             if algorithm == 3
-                @time benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
+                benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
             elseif algorithm == 4
                 benchmark4_gpu!(src2, trg2, p, q)
             elseif algorithm == 5
@@ -1322,7 +1326,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
                                 padding=padding, max_threads_per_block=max_threads_per_block)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             elseif algorithm == 9
-                @time benchmark9_gpu!(src2, trg2, p, q, r; t_padding=t_padding)
+                benchmark9_gpu!(src2, trg2, p, q, r; t_padding=t_padding)
             elseif algorithm == 10
                 benchmark10_gpu!(src2, trg2, p, q; t_padding=t_padding)
             else
@@ -1526,7 +1530,7 @@ end
 # for i in 5:17
 #     main(3; ns=2^i, algorithm=3)
 # end
-main(3; ns=2^15, debug=false, algorithm=8)
+main(3; ns=9800, debug=false, algorithm=7)
 # main(1; ns=8739, nt=3884, debug=true)
 # main(1; nt=2^9, ns=2^12, algorithm=3, padding=false)
 # main(3; nt=7^1, ns=2^12, p=7, q=32, r=512, algorithm=9, padding=false)
