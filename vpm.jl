@@ -1366,7 +1366,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
                 CUDA.@profile benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
             elseif algorithm == 8
                 pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-                CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices; t_padding=t_padding, max_threads_per_block=max_threads_per_block)
+                CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices; padding=padding, max_threads_per_block=max_threads_per_block)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             elseif algorithm == 9
                 p = p
@@ -1396,7 +1396,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             t_gpu = @benchmark benchmark7_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
         elseif algorithm == 8
             pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-            t_gpu = @benchmark benchmark8_gpu!($pfield, $tidx_min, $tidx_max, $s_indices; t_padding=$t_padding, max_threads_per_block=$max_threads_per_block)
+            t_gpu = @benchmark benchmark8_gpu!($pfield, $tidx_min, $tidx_max, $s_indices; padding=$padding, max_threads_per_block=$max_threads_per_block)
             trg2 .= view(pfield, :, 1:size(trg2, 2))
         elseif algorithm == 9
             p = p
