@@ -1250,7 +1250,7 @@ end
 
 function check_launch(n, p, q, max_threads_per_block=0; throw_error=false)
     if p > n; throw_error && error("p must be less than or equal to n"); return false; end
-    if p*q >= max_threads_per_block; throw_error && error("p*q must be less than $max_threads_per_block"); return false; end
+    if p*q > max_threads_per_block; throw_error && error("p*q must be less than $max_threads_per_block"); return false; end
     if q > p; throw_error && error("q must be less than or equal to p"); return false; end
     if n % p != 0; throw_error && error("n must be divisible by p"); return false; end
     if p % q != 0; throw_error && error("p must be divisible by q"); return false; end
@@ -1291,7 +1291,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
 
     if p == 0
         if algorithm == 9
-            p, q = get_launch_config(nt+t_padding, ns; max_threads_per_block=max_threads_per_block)
+            p, q, r = get_launch_config(nt+t_padding, ns; max_threads_per_block=max_threads_per_block)
         else
             p, q = get_launch_config(nt+t_padding; max_threads_per_block=max_threads_per_block)
         end
