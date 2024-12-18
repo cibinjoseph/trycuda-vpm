@@ -1278,7 +1278,7 @@ function benchmark10_gpu!(s, t, p, q; t_padding=0)
     t[16:24, :] .+= Array(view(o_d, 4:12, :))
 end
 
-function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true, max_threads_per_block=384, algorithm=3)
+function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true, max_threads_per_block=512, algorithm=3)
     T = Float64
 
     nt = nt==0 ? ns : nt
@@ -1417,7 +1417,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
     return
 end
 
-function get_launch_config(nt; p_max=0, q_max=0, max_threads_per_block=384)
+function get_launch_config(nt; p_max=0, q_max=0, max_threads_per_block=512)
     p_max = (p_max == 0) ? max_threads_per_block : p_max
     q_max = (q_max == 0) ? p_max : q_max
 
@@ -1463,7 +1463,7 @@ function get_launch_config(nt; p_max=0, q_max=0, max_threads_per_block=384)
     return p, q
 end
 
-function get_launch_config(nt, ns; p_max=0, q_max=0, r_max=875, max_threads_per_block=384)
+function get_launch_config(nt, ns; p_max=0, q_max=0, r_max=875, max_threads_per_block=512)
     # r_max=875 corresponds to 48KB in shared memory
     p_max = (p_max == 0) ? max_threads_per_block : p_max
     q_max = (q_max == 0) ? max_threads_per_block : q_max
