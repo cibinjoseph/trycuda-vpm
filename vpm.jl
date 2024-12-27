@@ -882,7 +882,6 @@ function gpu_vpm9!(s, t, p, q, r, kernel)
 
     # Variable initialization
     UJ = @MVector zeros(eltype(t), 12)
-    out = @MVector zeros(eltype(t), 12)
     idim::Int32 = 0
     isource::Int32 = 0
     i::Int32 = 0
@@ -893,62 +892,55 @@ function gpu_vpm9!(s, t, p, q, r, kernel)
     itile::Int32 = 1
     while itile <= n_tiles
         # Each thread will copy source coordinates corresponding to its index into shared memory. This will be done for each tile.
-        shblk = 1
+        shblk = 1i32
         while shblk <= n_shblks
             shmem_idx = ithread + (shblk-1i32)*blockDim().x
-            idim = 1
+            idim = 1i32
             if shmem_idx <= r
                 isource = shmem_idx + (itile-1i32)*r
                 if isource <= s_size
-                    while idim <= 7
+                    while idim <= 7i32
                         @inbounds sh_mem[idim, shmem_idx] = s[idim, isource]
-                        idim += 1
+                        idim += 1i32
                     end
                 else
-                    while idim <= 7
+                    while idim <= 7i32
                         @inbounds sh_mem[idim, shmem_idx] = zero(eltype(s))
-                        idim += 1
+                        idim += 1i32
                     end
                 end
             end
-            shblk += 1
+            shblk += 1i32
         end
         sync_threads()
 
         # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
-        i = 1
+        i = 1i32
         while i <= bodies_per_col
-            isource = i + bodies_per_col*(col-1)
+            isource = i + bodies_per_col*(col-1i32)
             if isource <= s_size
                 if itarget <= t_size
-                    out .= gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
-                end
-
-                # Sum up influences for each source in a tile
-                idim = 1
-                while idim <= 12
-                    @inbounds UJ[idim] += out[idim]
-                    idim += 1
+                    gpu_interaction!(UJ, tx, ty, tz, sh_mem, isource, kernel)
                 end
             end
-            i += 1
+            i += 1i32
         end
-        itile += 1
+        itile += 1i32
         sync_threads()
     end
 
     # Sum up accelerations for each target/thread
     # Each target will be accessed by q no. of threads
     if itarget <= t_size
-        idim = 1
-        while idim <=3
-            @inbounds CUDA.@atomic t[9+idim, itarget] += UJ[idim]
-            idim += 1
+        idim = 1i32
+        while idim <=3i32
+            @inbounds CUDA.@atomic t[9i32+idim, itarget] += UJ[idim]
+            idim += 1i32
         end
-        idim = 4
-        while idim <= 12
-            @inbounds CUDA.@atomic t[12+idim, itarget] += UJ[idim]
-            idim += 1
+        idim = 4i32
+        while idim <= 12i32
+            @inbounds CUDA.@atomic t[12i32+idim, itarget] += UJ[idim]
+            idim += 1i32
         end
     end
     return
