@@ -1417,7 +1417,7 @@ function get_launch_config(nt; p_max=0, q_max=0, max_threads_per_block=512)
     p_max = (p_max == 0) ? max_threads_per_block : p_max
     q_max = (q_max == 0) ? p_max : q_max
 
-    divs_n = sort(divisors(nt))
+    divs_n = sort(divisors(Int32(nt)))
     p = 1
     q = 1
     ip = 1
@@ -1465,7 +1465,7 @@ function get_launch_config(nt, ns; p_max=0, q_max=0, r_max=875, max_threads_per_
     q_max = (q_max == 0) ? max_threads_per_block : q_max
 
     # Find p
-    divs_nt = sort(divisors(nt))
+    divs_nt = sort(divisors(Int32(nt)))
     p = 1
     q = 1
     ip = 1
@@ -1479,7 +1479,7 @@ function get_launch_config(nt, ns; p_max=0, q_max=0, r_max=875, max_threads_per_
     end
 
     # Find r
-    divs_ns = sort(divisors(ns))
+    divs_ns = sort(divisors(Int32(ns)))
     r = 1
     ir = 1
     for (i, div) in enumerate(divs_ns)
