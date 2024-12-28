@@ -1250,6 +1250,19 @@ function check_launch(n, p, q, max_threads_per_block=0; throw_error=false)
     return true
 end
 
+function check_launch(nt, ns, p, q, r, max_threads_per_block=0; throw_error=false)
+    if p > nt; throw_error && error("p must be less than or equal to nt"); return false; end
+    if p*q > max_threads_per_block; throw_error && error("p*q must be less than $max_threads_per_block"); return false; end
+    # if q > p; throw_error && error("q must be less than or equal to p"); return false; end
+    if q > r; throw_error && error("q must be less than or equal to r"); return false; end
+    if nt % p != 0; throw_error && error("nt must be divisible by p"); return false; end
+    # if p % q != 0; throw_error && error("p must be divisible by q"); return false; end
+    if ns % r != 0; throw_error && error("ns must be divisible by p"); return false; end
+    if r % q != 0; throw_error && error("r must be divisible by q"); return false; end
+
+    return true
+end
+
 function benchmark10_gpu!(s, t, p, q; t_padding=0)
     s_d = CuArray(view(s, 1:7, :))
     t_d = CuArray(view(t, 1:3, :))
@@ -1365,7 +1378,6 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
                 CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices; padding=padding, max_threads_per_block=max_threads_per_block)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             elseif algorithm == 9
-                p = p
                 CUDA.@profile benchmark9_gpu!(src2, trg2, p, q, r; t_padding=t_padding)
             elseif algorithm == 10
                 CUDA.@profile benchmark10_gpu!(src2, trg2, p, q; t_padding=t_padding)
@@ -1376,7 +1388,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
     else
         check_launch(nt+t_padding, p, q, max_threads_per_block)
 
-        src, trg, src2, trg2 = get_inputs(ns, nfields; T=T)
+        src, trg, src2, trg2 = get_inputs(ns, nfields; T=T, nt=nt)
         t_cpu = @benchmark cpu_vpm!($src, $trg)
 
         if algorithm == 3
@@ -1395,8 +1407,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             t_gpu = @benchmark benchmark8_gpu!($pfield, $tidx_min, $tidx_max, $s_indices; padding=$padding, max_threads_per_block=$max_threads_per_block)
             trg2 .= view(pfield, :, 1:size(trg2, 2))
         elseif algorithm == 9
-            p = p
-            t_gpu = @benchmark benchmark9_gpu!($src2, $trg2, $p, $r, $q; t_padding=$t_padding)
+            t_gpu = @benchmark benchmark9_gpu!($src2, $trg2, $p, $q, $r; t_padding=$t_padding)
         elseif algorithm == 10
             t_gpu = @benchmark benchmark10_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
         else
@@ -1503,8 +1514,8 @@ function get_launch_config(nt, ns; p_max=0, q_max=0, r_max=875, max_threads_per_
         isgood = true
         for i in 1:ip
             for j in 1:ir
-                # isgood = check_launch(nt, divs_nt[i], divs_ns[j], max_threads_per_block)
-                isgood = divs_nt[i]*divs_ns[j] < max_threads_per_block
+                isgood = check_launch(nt, ns, divs_nt[i], divs_ns[j], r, max_threads_per_block)
+                # isgood = divs_nt[i]*divs_ns[j] < max_threads_per_block
                 if isgood && (divs_nt[i] <= p_max)
                     # Check if this is the max achievable ij value
                     # in the p, q choice matrix
@@ -1526,7 +1537,13 @@ end
 # for i in 5:17
 #     main(3; ns=2^i, algorithm=3)
 # end
-main(3; ns=9800, debug=false, algorithm=7)
+# main(3; ns=9800, debug=false, algorithm=7)
+divs = divisors(32)
+for r in divs, q in divs, p in divs
+    isgood = check_launch(4, 32, p, q, r, 512)
+    isgood && @show p, q, r
+    isgood && main(3; nt=4, ns=32, p=p, q=q, r=r, debug=false, algorithm=9, padding=false)
+end
 # main(1; ns=8739, nt=3884, debug=true)
 # main(1; nt=2^9, ns=2^12, algorithm=3, padding=false)
 # main(3; nt=7^1, ns=2^12, p=7, q=32, r=512, algorithm=9, padding=false)
