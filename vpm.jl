@@ -1307,7 +1307,11 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
         println("Tile length, p: $p")
         println("Cols per tile, q: $q")
 
-        check_launch(nt+t_padding, p, q, max_threads_per_block)
+        if algorithm == 9
+            check_launch(nt+t_padding, ns, p, q, r, max_threads_per_block)
+        else
+            check_launch(nt+t_padding, p, q, max_threads_per_block)
+        end
 
         src, trg, src2, trg2 = get_inputs(ns, nfields; T=T, nt=nt)
         if run_option == 1
@@ -1386,14 +1390,17 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             end
         end
     else
-        check_launch(nt+t_padding, p, q, max_threads_per_block)
+        if algorithm == 9
+            check_launch(nt+t_padding, ns, p, q, r, max_threads_per_block)
+        else
+            check_launch(nt+t_padding, p, q, max_threads_per_block)
+        end
 
         src, trg, src2, trg2 = get_inputs(ns, nfields; T=T, nt=nt)
         t_cpu = @benchmark cpu_vpm!($src, $trg)
 
         if algorithm == 3
             t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
-            @show median(t_gpu.times)
         elseif algorithm == 4
             t_gpu = @benchmark benchmark4_gpu!($src2, $trg2, $p, $q)
         elseif algorithm == 5
@@ -1448,20 +1455,18 @@ function get_launch_config(nt; p_max=0, q_max=0, max_threads_per_block=512)
     j_weight = 1-i_weight
 
     max_ij = i_weight*ip + j_weight*1
-    if nt <= 1<<13
-        isgood = true
-        for i in 1:ip
-            for j in 1:ip
-                isgood = check_launch(nt, divs_n[i], divs_n[j], max_threads_per_block)
-                if isgood && (divs_n[i] <= p_max)
-                    # Check if this is the max achievable ij value
-                    # in the p, q choice matrix
-                    obj_val = i_weight*i+j_weight*j
-                    if (obj_val >= max_ij) && (divs_n[j] <= q_max)
-                        max_ij = obj_val
-                        p = divs_n[i]
-                        q = divs_n[j]
-                    end
+    isgood = true
+    for i in 1:ip
+        for j in 1:ip
+            isgood = check_launch(nt, divs_n[i], divs_n[j], max_threads_per_block)
+            if isgood && (divs_n[i] <= p_max)
+                # Check if this is the max achievable ij value
+                # in the p, q choice matrix
+                obj_val = i_weight*i+j_weight*j
+                if (obj_val >= max_ij) && (divs_n[j] <= q_max)
+                    max_ij = obj_val
+                    p = divs_n[i]
+                    q = divs_n[j]
                 end
             end
         end
@@ -1510,21 +1515,19 @@ function get_launch_config(nt, ns; p_max=0, q_max=0, r_max=875, max_threads_per_
     j_weight = 1-i_weight
 
     max_ij = i_weight*ip + j_weight*1
-    if nt <= 1<<13
-        isgood = true
-        for i in 1:ip
-            for j in 1:ir
-                isgood = check_launch(nt, ns, divs_nt[i], divs_ns[j], r, max_threads_per_block)
-                # isgood = divs_nt[i]*divs_ns[j] < max_threads_per_block
-                if isgood && (divs_nt[i] <= p_max)
-                    # Check if this is the max achievable ij value
-                    # in the p, q choice matrix
-                    obj_val = i_weight*i+j_weight*j
-                    if (obj_val >= max_ij) && (divs_ns[j] <= q_max)
-                        max_ij = obj_val
-                        p = divs_nt[i]
-                        q = divs_ns[j]
-                    end
+    isgood = true
+    for i in 1:ip
+        for j in 1:ir
+            isgood = check_launch(nt, ns, divs_nt[i], divs_ns[j], r, max_threads_per_block)
+            # isgood = divs_nt[i]*divs_ns[j] < max_threads_per_block
+            if isgood && (divs_nt[i] <= p_max)
+                # Check if this is the max achievable ij value
+                # in the p, q choice matrix
+                obj_val = i_weight*i+j_weight*j
+                if (obj_val >= max_ij) && (divs_ns[j] <= q_max)
+                    max_ij = obj_val
+                    p = divs_nt[i]
+                    q = divs_ns[j]
                 end
             end
         end
@@ -1537,13 +1540,13 @@ end
 # for i in 5:17
 #     main(3; ns=2^i, algorithm=3)
 # end
-# main(3; ns=9800, debug=false, algorithm=7)
-divs = divisors(32)
-for r in divs, q in divs, p in divs
-    isgood = check_launch(4, 32, p, q, r, 512)
-    isgood && @show p, q, r
-    isgood && main(3; nt=4, ns=32, p=p, q=q, r=r, debug=false, algorithm=9, padding=false)
-end
+main(3; ns=2^17, debug=false, algorithm=7, show_pq=true)
+# divs = divisors(32)
+# for r in divs, q in divs, p in divs
+#     isgood = check_launch(4, 32, p, q, r, 512)
+#     isgood && @show p, q, r
+#     isgood && main(3; nt=4, ns=32, p=p, q=q, r=r, debug=false, algorithm=9, padding=false)
+# end
 # main(1; ns=8739, nt=3884, debug=true)
 # main(1; nt=2^9, ns=2^12, algorithm=3, padding=false)
 # main(3; nt=7^1, ns=2^12, p=7, q=32, r=512, algorithm=9, padding=false)
