@@ -177,24 +177,28 @@ end
         @inbounds UJ[2i32] += crss2 * g_sgm
         @inbounds UJ[3i32] += crss3 * g_sgm
 
-        @inbounds gam1 *= g_sgm
-        @inbounds gam2 *= g_sgm
-        @inbounds gam3 *= g_sgm
+        gam1 *= g_sgm
+        gam2 *= g_sgm
+        gam3 *= g_sgm
+
+        dX1 *= aux
+        dX2 *= aux
+        dX3 *= aux
 
         # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
         # Adds the Kronecker delta term
         # j=1
-        @inbounds UJ[4i32] += aux * crss1 * dX1
-        @inbounds UJ[5i32] += aux * crss2 * dX1 - gam3
-        @inbounds UJ[6i32] += aux * crss3 * dX1 + gam2
+        @inbounds UJ[4i32] += crss1 * dX1
+        @inbounds UJ[5i32] += crss2 * dX1 - gam3
+        @inbounds UJ[6i32] += crss3 * dX1 + gam2
         # j=2
-        @inbounds UJ[7i32] += aux * crss1 * dX2 + gam3
-        @inbounds UJ[8i32] += aux * crss2 * dX2
-        @inbounds UJ[9i32] += aux * crss3 * dX2 - gam1
+        @inbounds UJ[7i32] += crss1 * dX2 + gam3
+        @inbounds UJ[8i32] += crss2 * dX2
+        @inbounds UJ[9i32] += crss3 * dX2 - gam1
         # j=3
-        @inbounds UJ[10i32] += aux * crss1 * dX3 - gam2
-        @inbounds UJ[11i32] += aux * crss2 * dX3 + gam1
-        @inbounds UJ[12i32] += aux * crss3 * dX3
+        @inbounds UJ[10i32] += crss1 * dX3 - gam2
+        @inbounds UJ[11i32] += crss2 * dX3 + gam1
+        @inbounds UJ[12i32] += crss3 * dX3
     end
 
     return
@@ -1540,7 +1544,7 @@ end
 # for i in 5:17
 #     main(3; ns=2^i, algorithm=3)
 # end
-main(3; ns=2^17, debug=false, algorithm=7, show_pq=true)
+main(1; ns=2^5, debug=false, algorithm=7, show_pq=false)
 # divs = divisors(32)
 # for r in divs, q in divs, p in divs
 #     isgood = check_launch(4, 32, p, q, r, 512)
