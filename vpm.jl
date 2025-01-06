@@ -1300,9 +1300,10 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
 
     if p == 0
         if algorithm == 9
-            p, q, r = get_launch_config(nt+t_padding, ns; max_threads_per_block=max_threads_per_block)
+            p, q, r = get_launch_config1(nt+t_padding, ns; max_threads_per_block=max_threads_per_block)
         else
             p, q = get_launch_config(nt+t_padding; max_threads_per_block=max_threads_per_block)
+            r = 1
         end
     end
     if run_option == 1 || run_option == 2
@@ -1427,7 +1428,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
 
         speedup = median(t_cpu.times)/median(t_gpu.times)
         if show_pq
-            println("$ns $p $q $speedup")
+            println("$ns $p $q $r $speedup")
         else
             println("$ns $speedup")
         end
@@ -1540,17 +1541,63 @@ function get_launch_config(nt, ns; p_max=0, q_max=0, r_max=875, max_threads_per_
     return p, q, r
 end
 
+function get_launch_config1(nt, ns; p_max=0, q_max=0, r_max=875, max_threads_per_block=512)
+    # r_max=875 corresponds to 48KB in shared memory
+    p_max = (p_max == 0) ? max_threads_per_block : p_max
+    q_max = (q_max == 0) ? max_threads_per_block : q_max
+
+    # Find possible divisors
+    divs_nt = sort(divisors(Int32(nt)))
+    divs_ns = sort(divisors(Int32(ns)))
+
+    # Reduce divisors search space
+    divs_nt = divs_nt[findall(divs_nt .<= max_threads_per_block)]
+    divs_nt = p_max > 0 ? divs_nt[findall(divs_nt .<= p_max)] : divs_nt
+    divs_ns = divs_ns[findall(divs_ns .<= max_threads_per_block)]
+    divs_ns = q_max > 0 ? divs_ns[findall(divs_ns .<= q_max)] : divs_ns
+    divs_ns = r_max > 0 ? divs_ns[findall(divs_ns .<= r_max)] : divs_ns
+
+    p_weight = 0.5
+    q_weight = 0.2
+    r_weight = 0.3
+
+    p, q, r = Int32(1), Int32(1), Int32(1)
+    max_val = 0.0
+    for (ir, rval) in enumerate(divs_ns),
+        (iq, qval) in enumerate(divs_ns),
+        (ip, pval) in enumerate(divs_nt)
+
+        isgood = check_launch(nt, ns, pval, qval, rval, max_threads_per_block)
+        if isgood && (pval<=p_max) && (qval<=q_max) && (rval<=r_max) && (pval>1) && (qval>1)
+            # Check if this is the max achievable ij value
+            # in the p, q choice matrix
+            obj_val = p_weight*ip + q_weight*iq + r_weight*ir
+            if obj_val >= max_val
+                max_val = obj_val
+                p = pval
+                q = qval
+                r = rval
+            end
+        end
+    end
+
+    return p, q, r
+end
+
 # Run_option - # [1]test [2]profile [3]benchmark
 # for i in 5:17
 #     main(3; ns=2^i, algorithm=3)
 # end
-main(1; ns=2^5, debug=false, algorithm=7, show_pq=false)
+# main(1; ns=2^5, debug=false, algorithm=7, show_pq=false)
 # divs = divisors(32)
 # for r in divs, q in divs, p in divs
 #     isgood = check_launch(4, 32, p, q, r, 512)
 #     isgood && @show p, q, r
 #     isgood && main(3; nt=4, ns=32, p=p, q=q, r=r, debug=false, algorithm=9, padding=false)
 # end
+# main(3; nt=4, ns=2^12, algorithm=9, padding=false, show_pq=true)
+# main(3; nt=2^12, ns=2^12, algorithm=7, padding=false, show_pq=true)
+# main(3; nt=2^12, ns=2^12, algorithm=9, padding=false, show_pq=true)
 # main(1; ns=8739, nt=3884, debug=true)
 # main(1; nt=2^9, ns=2^12, algorithm=3, padding=false)
 # main(3; nt=7^1, ns=2^12, p=7, q=32, r=512, algorithm=9, padding=false)
