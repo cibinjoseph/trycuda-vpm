@@ -279,7 +279,7 @@ function gpu_vpm3!(s, t, p, q, kernel)
         i = 1
         while i <= bodies_per_col
             isource = i + bodies_per_col*(col-1)
-            if isource <= size(s, 2)
+            if isource <= p
                 if itarget <= size(t, 2)
                     @inbounds out .= gpu_interaction(t[1, itarget],
                                                      t[2, itarget],
@@ -369,7 +369,7 @@ function gpu_vpm4!(s, t, q, gb_mem, kernel)
         i = 1
         while i <= bodies_per_col
             isource = i + bodies_per_col*(col-1)
-            if isource <= s_size
+            if isource <= p
                 out = gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
 
                 # Sum up influences for each source in a column in the tile
@@ -507,7 +507,7 @@ function gpu_vpm5!(s, t, q, kernel)
         i = 1
         while i <= bodies_per_col
             isource = i + bodies_per_col*(col-1)
-            if isource <= s_size
+            if isource <= p
                 out .= gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
 
                 # Sum up influences for each source in a column in the tile
@@ -645,7 +645,7 @@ function gpu_vpm6!(s, t, p, q, kernel)
         i = 1
         while i <= bodies_per_col
             isource = i + bodies_per_col*(col-1)
-            if isource <= s_size
+            if isource <= p*q
                 if itarget <= t_size
                     out .= gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
                 end
@@ -736,7 +736,7 @@ function gpu_vpm7!(s, t, p, q, kernel)
         i = 1i32
         while i <= bodies_per_col
             isource = i + bodies_per_col*(col-1i32)
-            if isource <= s_size
+            if isource <= p
                 if itarget <= t_size
                     gpu_interaction!(UJ, tx, ty, tz, sh_mem, isource, kernel)
                 end
@@ -822,7 +822,7 @@ function gpu_vpm8!(pfield, tidx_min, tidx_max, s_indices,
         i = 1
         while i <= bodies_per_col
             isource = i + bodies_per_col*(col-1)
-            if isource <= s_size
+            if isource <= p
                 if tidx_min <= itarget && itarget <= tidx_max
                     out .= gpu_interaction(tx, ty, tz, sh_mem, isource, kernel)
                 end
@@ -922,7 +922,7 @@ function gpu_vpm9!(s, t, p, q, r, kernel)
         i = 1i32
         while i <= bodies_per_col
             isource = i + bodies_per_col*(col-1i32)
-            if isource <= s_size
+            if isource <= r
                 if itarget <= t_size
                     gpu_interaction!(UJ, tx, ty, tz, sh_mem, isource, kernel)
                 end
@@ -1006,7 +1006,7 @@ function gpu_vpm10!(out, s, t, p, q, kernel)
         i = 1i32
         while i <= bodies_per_col
             isource = i + bodies_per_col*(col-1i32)
-            if isource <= s_size
+            if isource <= p
                 if itarget <= t_size
                     gpu_interaction!(UJ, tx, ty, tz, sh_mem, isource, kernel)
                 end
