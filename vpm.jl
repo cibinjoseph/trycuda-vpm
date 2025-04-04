@@ -1287,7 +1287,7 @@ function benchmark10_gpu!(s, t, p, q; t_padding=0)
     t[16:24, :] .+= Array(view(o_d, 4:12, :))
 end
 
-function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true, max_threads_per_block=512, algorithm=3, show_pq=false)
+function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true, max_threads_per_block=512, algorithm=3, show_pq=false, return_vals=false)
     T = Float64
 
     nt = nt==0 ? ns : nt
@@ -1429,8 +1429,14 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
         speedup = median(t_cpu.times)/median(t_gpu.times)
         if show_pq
             println("$ns $p $q $r $speedup")
+            if return_vals
+                return ns, p, q, r, speedup
+            end
         else
             println("$ns $speedup")
+            if return_vals
+                return ns, speedup
+            end
         end
     end
     return
