@@ -25,7 +25,7 @@ function get_all_pq(n)
     return pq
 end
 
-function get_score(pin, qin; pmax=512, qmax=32, α=0.0, β=0.0)
+function get_score(pin, qin; pmax=512, qmax=8, α=0.0, β=0.0)
     p = log(pin)/log(pmax)
     q = qin/qmax
     α = abs(α) < 1e-6 ? 0.1 : α
@@ -55,7 +55,7 @@ function closest_tuple_32(p, q; productmax=512, dist_threshold=10)
     return popt, qopt
 end
 
-function optimal_pq(n; productmax=512, multiple32=false, pmax=512, qmax=32, α=0.0, β=0.0)
+function optimal_pq(n; productmax=512, multiple32=false, pmax=512, qmax=8, α=0.0, β=0.0)
     divs = sort(divisors(n))
     popt = 1
     qopt = 1
