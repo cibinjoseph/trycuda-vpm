@@ -29,15 +29,15 @@ function get_score(pin, qin; pmax=512, qmax=8, α=0.0, β=0.0)
     p = log(pin)/log(pmax)
     q = qin/qmax
     α = abs(α) < 1e-6 ? 0.1 : α
-    β = abs(β) < 1e-6 ? 0.2 : β
-    score = -(p-(0.7-α*q))^2 + (1-(0.5-β*q))^2
+    β = abs(β) < 1e-6 ? 0.5 : β
+    # score = -(p-(0.7-α*q))^2 + (1-(0.5-β*q))^2
+    score = -(p-(0.7-α*q))^2 + 1+(β*q)
     return score
 end
 
 include("divs_512.jl")
 function closest_tuple_32(p, q; productmax=512, dist_threshold=10)
     if productmax == 512
-        # Removed the abs() in Manhattan distance computation
         dist_min = 1000
         popt = p
         qopt = q
@@ -56,7 +56,19 @@ function closest_tuple_32(p, q; productmax=512, dist_threshold=10)
 end
 
 function optimal_pq(n; productmax=512, multiple32=false, pmax=512, qmax=8, α=0.0, β=0.0)
-    divs = sort(divisors(n))
+    divs = divisors(n)
+    npad = 0
+
+    for k=1:10
+        if length(divs) > 8
+            break
+        else
+            npad = k
+            divs = divisors(n+k)
+        end
+    end
+    divs = sort(divs)
+
     popt = 1
     qopt = 1
     scoremax = 0
@@ -74,7 +86,7 @@ function optimal_pq(n; productmax=512, multiple32=false, pmax=512, qmax=8, α=0.
     if multiple32
         popt, qopt = closest_tuple_32(popt, qopt; productmax=512)
     end
-    return popt, qopt
+    return popt, qopt, npad
 end
 
 function max_speedup(n)
@@ -93,8 +105,8 @@ function max_speedup(n)
     return p_max, q_max, speedup_max
 end
 
-# nsamples = 1000
-# nvals = rand(1000:100_000, nsamples)
+nsamples = 20
+nvals = rand(1000:100_000, nsamples)
 
 # open("heuristic.csv", "w") do fh
 #     println(fh, "n p_max q_max speedup_max popt qopt popt32 qopt32")
@@ -102,9 +114,15 @@ end
 #     for (i, n) in enumerate(nvals)
 #         println("Case $i $n")
 #         p_max, q_max, speedup_max = max_speedup(n)
-#         popt, qopt = optimal_pq(n; multiple32=false)
-#         popt32, qopt32 = optimal_pq(n; multiple32=true)
+#         popt, qopt, _ = optimal_pq(n; multiple32=false)
+#         popt32, qopt32, _ = optimal_pq(n; multiple32=true)
 #         println(fh, "$n $p_max $q_max $speedup_max $popt $qopt $popt32 $qopt32")
 #         flush(fh)
 #     end
 # end
+
+for n in nvals
+    p, q = optimal_pq(n; multiple32=false)
+    println("$n $p $q")
+end
+return
