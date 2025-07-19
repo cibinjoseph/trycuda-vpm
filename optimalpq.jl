@@ -34,8 +34,8 @@ function get_score(pin, qin; pmax=512, qmax=8, α=0.0, β=0.0)
     return score
 end
 
-function partial_divisors(n::Int; maxdiv::Int=512)
-    divs = Int[]
+function partial_divisors(n; maxdiv=512)
+    divs = Vector{typeof(n)}()
     sqrt_n = isqrt(n)
     for i in 1:min(maxdiv, sqrt_n)
         if n % i == 0
