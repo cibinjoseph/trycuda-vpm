@@ -107,9 +107,28 @@ function optimal_pq(n; productmax=512, multiple32=false, pmax=512, qmax=8, α=0.
 
     # Find closest pair multiple of 32
     if multiple32
-        popt, qopt = closest_tuple_32(popt, qopt; productmax=512)
+        popt, qopt = closest_tuple_32(popt, qopt; productmax=productmax)
     end
     return popt, qopt, npad
+end
+
+function optimal_pqr(ns; productmax=512, multiple32=false, pmax=1, qmax=512, rmax=876)
+    popt = pmax
+    divs = partial_divisors(ns; maxdiv=max(qmax, rmax))
+    maxval = maximum(divs)
+    ropt = min(rmax, maxval)
+    qopt = 1
+    for div in divs
+        if div > qopt && popt*div <= productmax
+            qopt = div
+        end
+    end
+
+    if multiple32
+        qopt = cld(popt*qopt, 32) * 32 ÷ popt
+    end
+
+    return popt, qopt, ropt
 end
 
 function max_speedup(n)
