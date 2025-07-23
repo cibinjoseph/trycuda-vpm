@@ -74,7 +74,7 @@ function optimal_pq(n; productmax=512, multiple32=false, pmax=512, qmax=8, α=0.
     npad = 0
 
     for k=1:10
-        if length(divs) > 8
+        if length(divs) >= 8
             break
         else
             npad = k
@@ -87,7 +87,7 @@ function optimal_pq(n; productmax=512, multiple32=false, pmax=512, qmax=8, α=0.
     # sort!(pvals)
 
     qvals = copy(divs)
-    filter!(x -> x < qmax, qvals)
+    filter!(x -> x <= qmax, qvals)
     # sort!(qvals)
 
     popt = 1
