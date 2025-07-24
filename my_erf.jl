@@ -255,6 +255,11 @@ function gpu_g_dgdr(r::T) where T
     return my_erf(r*T(invsqr2))-aux, r*aux
 end
 
+@inline function g_dgdr_wnklmns(r)
+  aux0 = (r^2 + 1)^2.5
+  return r^3 * (r^2 + 2.5) / aux0, 7.5 * r^2 / (aux0*(r^2 + 1))
+end
+
 # n = 2^3
 # T = Float32
 #

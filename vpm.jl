@@ -13,6 +13,7 @@ const nfields = 43
 
 # Definitions for GPU erf() function
 include("my_erf.jl")
+const vpm_kernel = g_dgdr_wnklmns
 
 function get_inputs(ns, nfields; nt=0, T=Float32)
     Random.seed!(1234)  # This has to be present inside this function
@@ -51,7 +52,8 @@ end
         # Regularizing function and deriv
         # g_sgm = g_val(r/sigma)
         # dg_sgmdr = dg_val(r/sigma)
-        g_sgm, dg_sgmdr = cpu_g_dgdr(r/sigma)
+        # g_sgm, dg_sgmdr = cpu_g_dgdr(r/sigma)
+        g_sgm, dg_sgmdr = vpm_kernel(r/sigma)
 
         # K × Γp
         @inbounds crss1 = -T(const4) / r3 * ( dX2*gam3 - dX3*gam2 )
@@ -141,7 +143,7 @@ end
 end
 
 @inline function gpu_interaction!(UJ, tx, ty, tz, s, j, kernel)
-    T = eltype(s)
+    T = typeof(tx)
     @inbounds dX1 = tx - s[1i32, j]
     @inbounds dX2 = ty - s[2i32, j]
     @inbounds dX3 = tz - s[3i32, j]
@@ -172,11 +174,6 @@ end
         crss2 = dX3*gam1 - dX1*gam3
         crss3 = dX1*gam2 - dX2*gam1
 
-        # U = ∑g_σ(x-xp) * K(x-xp) × Γp
-        @inbounds UJ[1i32] += crss1 * g_sgm
-        @inbounds UJ[2i32] += crss2 * g_sgm
-        @inbounds UJ[3i32] += crss3 * g_sgm
-
         gam1 *= g_sgm
         gam2 *= g_sgm
         gam3 *= g_sgm
@@ -185,20 +182,33 @@ end
         dX2 *= aux
         dX3 *= aux
 
+        # U = ∑g_σ(x-xp) * K(x-xp) × Γp
+        @inbounds begin
+            UJ[1i32] += crss1 * g_sgm
+            UJ[2i32] += crss2 * g_sgm
+            UJ[3i32] += crss3 * g_sgm
+        end
+
         # ∂u∂xj(x) = −∑gσ/(4πr^3) δij×Γp
         # Adds the Kronecker delta term
         # j=1
-        @inbounds UJ[4i32] += crss1 * dX1
-        @inbounds UJ[5i32] += crss2 * dX1 - gam3
-        @inbounds UJ[6i32] += crss3 * dX1 + gam2
+        @inbounds begin
+            UJ[4i32] += crss1 * dX1
+            UJ[5i32] += crss2 * dX1 - gam3
+            UJ[6i32] += crss3 * dX1 + gam2
+        end
         # j=2
-        @inbounds UJ[7i32] += crss1 * dX2 + gam3
-        @inbounds UJ[8i32] += crss2 * dX2
-        @inbounds UJ[9i32] += crss3 * dX2 - gam1
+        @inbounds begin
+            UJ[7i32] += crss1 * dX2 + gam3
+            UJ[8i32] += crss2 * dX2
+            UJ[9i32] += crss3 * dX2 - gam1
+        end
         # j=3
-        @inbounds UJ[10i32] += crss1 * dX3 - gam2
-        @inbounds UJ[11i32] += crss2 * dX3 + gam1
-        @inbounds UJ[12i32] += crss3 * dX3
+        @inbounds begin
+            UJ[10i32] += crss1 * dX3 - gam2
+            UJ[11i32] += crss2 * dX3 + gam1
+            UJ[12i32] += crss3 * dX3
+        end
     end
 
     return
@@ -684,7 +694,7 @@ end
 # Each thread handles a single target and uses local GPU memory
 # Sources divided into multiple columns and influence is computed by multiple threads
 # Uses in-place interaction kernel gpu_interaction!()
-function gpu_vpm7!(s, t, p, q, kernel)
+function gpu_vpm7!(out, s, t, p, q, kernel)
     t_size::Int32 = size(t, 2)
     s_size::Int32 = size(s, 2)
 
@@ -750,14 +760,19 @@ function gpu_vpm7!(s, t, p, q, kernel)
     # Sum up accelerations for each target/thread
     # Each target will be accessed by q no. of threads
     if itarget <= t_size
+        # idim = 1i32
+        # while idim <= 3i32
+        #     @inbounds CUDA.@atomic t[9i32+idim, itarget] += UJ[idim]
+        #     idim += 1i32
+        # end
+        # idim = 4i32
+        # while idim <= 12i32
+        #     @inbounds CUDA.@atomic t[12i32+idim, itarget] += UJ[idim]
+        #     idim += 1i32
+        # end
         idim = 1i32
-        while idim <= 3i32
-            @inbounds CUDA.@atomic t[9i32+idim, itarget] += UJ[idim]
-            idim += 1i32
-        end
-        idim = 4i32
         while idim <= 12i32
-            @inbounds CUDA.@atomic t[12i32+idim, itarget] += UJ[idim]
+            @inbounds CUDA.@atomic out[idim, itarget] += UJ[idim]
             idim += 1i32
         end
     end
@@ -1051,7 +1066,7 @@ function benchmark3_gpu!(s, t, p, q; t_padding=0)
 
     s_size = size(s, 2)
     t_size = size(t, 2)+t_padding
-    kernel = gpu_g_dgdr
+    kernel = vpm_kernel
 
     # Num of threads in a tile should always be 
     # less than number of threads in a block (1024)
@@ -1070,7 +1085,7 @@ function benchmark4_gpu!(s, t, p, q)
     s_d = CuArray(view(s, 1:7, :))
     t_d = CuArray(view(t, 1:24, :))
     t_size = size(t_d, 2)
-    kernel = gpu_g_dgdr
+    kernel = vpm_kernel
 
     # Num of threads in a tile should always be 
     # less than number of threads in a block (1024)
@@ -1094,7 +1109,7 @@ end
 function benchmark5_gpu!(s, t, p, q)
     s_d = CuArray(view(s, 1:7, :))
     t_d = CuArray(view(t, 1:24, :))
-    kernel = gpu_g_dgdr
+    kernel = vpm_kernel
 
     # Num of threads in a tile should always be 
     # less than number of threads in a block (1024)
@@ -1113,7 +1128,7 @@ function benchmark6_gpu!(s, t, p, q; t_padding=0)
     t_d = CuArray(view(t, 1:24, :))
 
     t_size = size(t, 2)+t_padding
-    kernel = gpu_g_dgdr
+    kernel = vpm_kernel
 
     # Num of threads in a tile should always be 
     # less than number of threads in a block (1024)
@@ -1129,21 +1144,29 @@ end
 
 function benchmark7_gpu!(s, t, p, q; t_padding=0)
     s_d = CuArray(view(s, 1:7, :))
-    t_d = CuArray(view(t, 1:24, :))
+    t_d = CuArray(view(t, 1:3, :))
 
-    t_size = size(t, 2)+t_padding
-    kernel = gpu_g_dgdr
+    nt = size(t, 2)
+    t_size = nt+t_padding
+    kernel = vpm_kernel
 
     # Num of threads in a tile should always be 
     # less than number of threads in a block (1024)
     # or limited by memory size
     threads::Int32 = p*q
     blocks::Int32 = cld(t_size, p)
-    shmem = sizeof(eltype(s)) * 7 * p  # XYZ + Γ123 + σ = 7 variables
-    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm7!(s_d, t_d, Int32(p), Int32(q), kernel)
+    shmem::Int32 = sizeof(eltype(s)) * 7 * p  # XYZ + Γ123 + σ = 7 variables
+    UJ_d = CUDA.zeros(eltype(s), 12, nt)
 
-    t[10:12, :] .= Array(view(t_d, 10:12, :))
-    t[16:24, :] .= Array(view(t_d, 16:24, :))
+    p = Int32(p)
+    q = Int32(q)
+    CUDA.@time begin
+        # CUDA.@device_code_ptx 
+        @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm7!(UJ_d, s_d, t_d, p, q, kernel)
+    end
+
+    @inbounds t[10:12, 1:nt] .+= Array(view(UJ_d, 1:3, 1:nt))
+    @inbounds t[16:24, 1:nt] .+= Array(view(UJ_d, 4:12, 1:nt))
 end
 
 function prep8_gpu!(s, t)
@@ -1163,7 +1186,7 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
     t_size::Int32 = tidx_max-tidx_min+1
     tidx_offset::Int32 = 0 
     sidx_offset::Int32 = 0 
-    kernel = gpu_g_dgdr
+    kernel = vpm_kernel
     nstreams = 5
     nstreams_range = nstreams:-1:1
 
@@ -1230,7 +1253,7 @@ function benchmark9_gpu!(s, t, p, q, r; t_padding=0)
     t_d = CuArray(view(t, 1:24, :))
 
     t_size = size(t, 2)+t_padding
-    kernel = gpu_g_dgdr
+    kernel = vpm_kernel
 
     # Num of threads in a tile should always be 
     # less than number of threads in a block (1024)
@@ -1273,7 +1296,7 @@ function benchmark10_gpu!(s, t, p, q; t_padding=0)
     o_d = CUDA.zeros(12, size(t_d, 2))
 
     t_size = size(t, 2)+t_padding
-    kernel = gpu_g_dgdr
+    kernel = vpm_kernel
 
     # Num of threads in a tile should always be 
     # less than number of threads in a block (1024)
@@ -1287,7 +1310,7 @@ function benchmark10_gpu!(s, t, p, q; t_padding=0)
     t[16:24, :] .+= Array(view(o_d, 4:12, :))
 end
 
-function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true, max_threads_per_block=512, algorithm=3, show_pq=false, return_vals=false)
+function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true, max_threads_per_block=512, algorithm=3, show_pq=false, return_vals=false, compare_cpu=true)
     T = Float64
 
     nt = nt==0 ? ns : nt
@@ -1357,8 +1380,11 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
                 # writedlm("trg_cpu.dat", trg[10, :])
                 # writedlm("trg_gpu.dat", trg2[10, :])
                 if debug
+                    println("CPU u,v,w:")
                     display(trg[10:12, :])
+                    println("GPU u,v,w:")
                     display(trg2[10:12, :])
+                    println("Diff u,v,w:")
                     display(diff[10:12, :])
                     # println("J vals")
                     # display(trg[16:24, :])
@@ -1402,7 +1428,10 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
         end
 
         src, trg, src2, trg2 = get_inputs(ns, nfields; T=T, nt=nt)
-        t_cpu = @benchmark cpu_vpm!($src, $trg)
+        t_cpu = 0.0
+        if compare_cpu
+            t_cpu = @benchmark cpu_vpm!($src, $trg)
+        end
 
         if algorithm == 3
             t_gpu = @benchmark benchmark3_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
@@ -1426,7 +1455,11 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             @error "Invalid algorithm selected"
         end
 
-        speedup = median(t_cpu.times)/median(t_gpu.times)
+        speedup = median(t_gpu.times)
+        if compare_cpu
+            speedup = median(t_cpu.times)/speedup
+        end
+
         if show_pq
             println("$ns $p $q $r $speedup")
             if return_vals
