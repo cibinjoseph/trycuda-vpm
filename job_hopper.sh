@@ -25,4 +25,8 @@ export OMP_NUM_THREADS=$SLURM_CPUS_ON_NODE
 # julia --project=. benchmark_pqr.jl 17100 128 | tee out17100x128.csv
 # Higher no. of targets, nt/ns > 1
 # julia --project=. benchmark_pqr.jl 1024 17100 | tee out1024x17100.csv
-julia --project=. benchmark_pq.jl 40000 | tee out40000_hop.csv
+# julia --project=. benchmark_pq.jl 40000 | tee out40000_hop.csv
+
+
+julia --project=. benchmark_pqr2.jl | tee pqr512_pq_hop.csv
+julia --project=. benchmark_pqr2.jl 1024 | tee pqr1024_pq_hop.csv
