@@ -1160,10 +1160,10 @@ function benchmark7_gpu!(s, t, p, q; t_padding=0)
 
     p = Int32(p)
     q = Int32(q)
-    CUDA.@time begin
+    # CUDA.@time begin
         # CUDA.@device_code_ptx 
         @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm7!(UJ_d, s_d, t_d, p, q, kernel)
-    end
+    # end
 
     @inbounds t[10:12, 1:nt] .+= Array(view(UJ_d, 1:3, 1:nt))
     @inbounds t[16:24, 1:nt] .+= Array(view(UJ_d, 4:12, 1:nt))
