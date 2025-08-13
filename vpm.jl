@@ -9,7 +9,10 @@ import NVTX
 const eps2 = 1e-6
 const const4 = 0.25/pi
 const nfields = 43
+const default_productmax = 512
 
+# Launch config selector
+include("launch_selection.jl")
 
 # Definitions for GPU erf() function
 include("my_erf.jl")
@@ -1178,7 +1181,7 @@ function prep8_gpu!(s, t)
 end
 
 function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
-        padding=true, max_threads_per_block=0)
+        padding=true, productmax=default_productmax)
 
     pfield_d = CuArray(view(pfield, 1:24, :))
     s_indices_d = CuArray(s_indices)
@@ -1214,7 +1217,7 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
         end
 
         # Kernel launch config
-        p[i], q[i] = get_launch_config(step+t_padding; q_max=0, max_threads_per_block=max_threads_per_block)
+        p[i], q[i], _ = optimal_pq(step+t_padding; q_max=1, multiple32=multiple32)
         threads[i] = p[i]*q[i]
         blocks[i] = cld(step+t_padding, p[i])
 
@@ -1267,29 +1270,6 @@ function benchmark9_gpu!(s, t, p, q, r; t_padding=0)
     t[16:24, :] .= Array(view(t_d, 16:24, :))
 end
 
-function check_launch(n, p, q, max_threads_per_block=0; throw_error=false)
-    if p > n; throw_error && error("p must be less than or equal to n"); return false; end
-    if p*q > max_threads_per_block; throw_error && error("p*q must be less than $max_threads_per_block"); return false; end
-    if q > p; throw_error && error("q must be less than or equal to p"); return false; end
-    if n % p != 0; throw_error && error("n must be divisible by p"); return false; end
-    if p % q != 0; throw_error && error("p must be divisible by q"); return false; end
-
-    return true
-end
-
-function check_launch(nt, ns, p, q, r, max_threads_per_block=0; throw_error=false)
-    if p > nt; throw_error && error("p must be less than or equal to nt"); return false; end
-    if p*q > max_threads_per_block; throw_error && error("p*q must be less than $max_threads_per_block"); return false; end
-    # if q > p; throw_error && error("q must be less than or equal to p"); return false; end
-    if q > r; throw_error && error("q must be less than or equal to r"); return false; end
-    if nt % p != 0; throw_error && error("nt must be divisible by p"); return false; end
-    # if p % q != 0; throw_error && error("p must be divisible by q"); return false; end
-    if ns % r != 0; throw_error && error("ns must be divisible by p"); return false; end
-    if r % q != 0; throw_error && error("r must be divisible by q"); return false; end
-
-    return true
-end
-
 function benchmark10_gpu!(s, t, p, q; t_padding=0)
     s_d = CuArray(view(s, 1:7, :))
     t_d = CuArray(view(t, 1:3, :))
@@ -1310,7 +1290,7 @@ function benchmark10_gpu!(s, t, p, q; t_padding=0)
     t[16:24, :] .+= Array(view(o_d, 4:12, :))
 end
 
-function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true, max_threads_per_block=512, algorithm=3, show_pq=false, return_vals=false, compare_cpu=true)
+function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true, productmax=default_productmax, algorithm=3, show_pq=false, return_vals=false, compare_cpu=true, multiple32=true)
     T = Float64
 
     nt = nt==0 ? ns : nt
@@ -1323,10 +1303,9 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
 
     if p == 0
         if algorithm == 9
-            p, q, r = get_launch_config1(nt+t_padding, ns; max_threads_per_block=max_threads_per_block)
+            p, q, r = optimal_pqr(ns; multiple32=multiple32)
         else
-            p, q = get_launch_config(nt+t_padding; max_threads_per_block=max_threads_per_block)
-            r = 1
+            p, q, r = optimal_pq(nt+t_padding; multiple32=multiple32)
         end
     end
     if run_option == 1 || run_option == 2
@@ -1335,11 +1314,11 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
         println("Tile length, p: $p")
         println("Cols per tile, q: $q")
 
-        if algorithm == 9
-            check_launch(nt+t_padding, ns, p, q, r, max_threads_per_block)
-        else
-            check_launch(nt+t_padding, p, q, max_threads_per_block)
-        end
+        # if algorithm == 9
+        #     check_launch(nt+t_padding, ns, p, q, r, productmax)
+        # else
+        #     check_launch(nt+t_padding, p, q, productmax)
+        # end
 
         src, trg, src2, trg2 = get_inputs(ns, nfields; T=T, nt=nt)
         if run_option == 1
@@ -1360,7 +1339,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             elseif algorithm == 8
                 pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
                 benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
-                                padding=padding, max_threads_per_block=max_threads_per_block)
+                                padding=padding, productmax=productmax)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             elseif algorithm == 9
                 benchmark9_gpu!(src2, trg2, p, q, r; t_padding=t_padding)
@@ -1410,7 +1389,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
                 CUDA.@profile benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
             elseif algorithm == 8
                 pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-                CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices; padding=padding, max_threads_per_block=max_threads_per_block)
+                CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices; padding=padding, productmax=productmax)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             elseif algorithm == 9
                 CUDA.@profile benchmark9_gpu!(src2, trg2, p, q, r; t_padding=t_padding)
@@ -1421,11 +1400,11 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             end
         end
     else
-        if algorithm == 9
-            check_launch(nt+t_padding, ns, p, q, r, max_threads_per_block)
-        else
-            check_launch(nt+t_padding, p, q, max_threads_per_block)
-        end
+        # if algorithm == 9
+        #     check_launch(nt+t_padding, ns, p, q, r, productmax)
+        # else
+        #     check_launch(nt+t_padding, p, q, productmax)
+        # end
 
         src, trg, src2, trg2 = get_inputs(ns, nfields; T=T, nt=nt)
         t_cpu = 0.0
@@ -1445,7 +1424,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             t_gpu = @benchmark benchmark7_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
         elseif algorithm == 8
             pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-            t_gpu = @benchmark benchmark8_gpu!($pfield, $tidx_min, $tidx_max, $s_indices; padding=$padding, max_threads_per_block=$max_threads_per_block)
+            t_gpu = @benchmark benchmark8_gpu!($pfield, $tidx_min, $tidx_max, $s_indices; padding=$padding, productmax=$productmax)
             trg2 .= view(pfield, :, 1:size(trg2, 2))
         elseif algorithm == 9
             t_gpu = @benchmark benchmark9_gpu!($src2, $trg2, $p, $q, $r; t_padding=$t_padding)
@@ -1461,166 +1440,18 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
         end
 
         if show_pq
-            println("$ns $p $q $r $speedup")
+            println("$nt $ns $p $q $r $speedup")
             if return_vals
                 return ns, p, q, r, speedup
             end
         else
-            println("$ns $speedup")
+            println("$nt $ns $speedup")
             if return_vals
                 return ns, speedup
             end
         end
     end
     return
-end
-
-function get_launch_config(nt; p_max=0, q_max=0, max_threads_per_block=512)
-    p_max = (p_max == 0) ? max_threads_per_block : p_max
-    q_max = (q_max == 0) ? p_max : q_max
-
-    divs_n = sort(divisors(Int32(nt)))
-    p = 1
-    q = 1
-    ip = 1
-    for (i, div) in enumerate(divs_n)
-        if div <= p_max
-            p = div
-            ip = i
-        else
-            break
-        end
-    end
-
-    # Decision algorithm 1: Creates a matrix using indices and finds max of
-    # weighted sum of indices
-
-    i_weight = 0
-    j_weight = 1-i_weight
-
-    max_ij = i_weight*ip + j_weight*1
-    isgood = true
-    for i in 1:ip
-        for j in 1:ip
-            isgood = check_launch(nt, divs_n[i], divs_n[j], max_threads_per_block)
-            if isgood && (divs_n[i] <= p_max)
-                # Check if this is the max achievable ij value
-                # in the p, q choice matrix
-                obj_val = i_weight*i+j_weight*j
-                if (obj_val >= max_ij) && (divs_n[j] <= q_max)
-                    max_ij = obj_val
-                    p = divs_n[i]
-                    q = divs_n[j]
-                end
-            end
-        end
-    end
-
-    return p, q
-end
-
-function get_launch_config(nt, ns; p_max=0, q_max=0, r_max=875, max_threads_per_block=512)
-    # r_max=875 corresponds to 48KB in shared memory
-    p_max = (p_max == 0) ? max_threads_per_block : p_max
-    q_max = (q_max == 0) ? max_threads_per_block : q_max
-
-    # Find p
-    divs_nt = sort(divisors(Int32(nt)))
-    p = 1
-    q = 1
-    ip = 1
-    for (i, div) in enumerate(divs_nt)
-        if div <= p_max
-            p = div
-            ip = i
-        else
-            break
-        end
-    end
-
-    # Find r
-    divs_ns = sort(divisors(Int32(ns)))
-    r = 1
-    ir = 1
-    for (i, div) in enumerate(divs_ns)
-        if div <= r_max
-            r = div
-            ir = i
-        else
-            break
-        end
-    end
-
-    # Decision algorithm 1: Creates a matrix using indices and finds max of
-    # weighted sum of indices
-
-    # Find q based on r
-    i_weight = 0
-    j_weight = 1-i_weight
-
-    max_ij = i_weight*ip + j_weight*1
-    isgood = true
-    for i in 1:ip
-        for j in 1:ir
-            isgood = check_launch(nt, ns, divs_nt[i], divs_ns[j], r, max_threads_per_block)
-            # isgood = divs_nt[i]*divs_ns[j] < max_threads_per_block
-            if isgood && (divs_nt[i] <= p_max)
-                # Check if this is the max achievable ij value
-                # in the p, q choice matrix
-                obj_val = i_weight*i+j_weight*j
-                if (obj_val >= max_ij) && (divs_ns[j] <= q_max)
-                    max_ij = obj_val
-                    p = divs_nt[i]
-                    q = divs_ns[j]
-                end
-            end
-        end
-    end
-
-    return p, q, r
-end
-
-function get_launch_config1(nt, ns; p_max=0, q_max=0, r_max=875, max_threads_per_block=512)
-    # r_max=875 corresponds to 48KB in shared memory
-    p_max = (p_max == 0) ? max_threads_per_block : p_max
-    q_max = (q_max == 0) ? max_threads_per_block : q_max
-
-    # Find possible divisors
-    divs_nt = sort(divisors(Int32(nt)))
-    divs_ns = sort(divisors(Int32(ns)))
-
-    # Reduce divisors search space
-    divs_nt = divs_nt[findall(divs_nt .<= max_threads_per_block)]
-    divs_nt = p_max > 0 ? divs_nt[findall(divs_nt .<= p_max)] : divs_nt
-    divs_ns = divs_ns[findall(divs_ns .<= max_threads_per_block)]
-    divs_ns = q_max > 0 ? divs_ns[findall(divs_ns .<= q_max)] : divs_ns
-    divs_ns = r_max > 0 ? divs_ns[findall(divs_ns .<= r_max)] : divs_ns
-
-    p_weight = 0.5
-    q_weight = 0.2
-    r_weight = 0.3
-
-    p, q, r = Int32(1), Int32(1), Int32(1)
-    max_val = 0.0
-    for (ir, rval) in enumerate(divs_ns),
-        (iq, qval) in enumerate(divs_ns),
-        (ip, pval) in enumerate(divs_nt)
-
-        isgood = check_launch(nt, ns, pval, qval, rval, max_threads_per_block)
-        if isgood && (pval<=p_max) && (qval<=q_max) && (rval<=r_max) && (pval>1) && (qval>1)
-            # Check if this is the max achievable ij value
-            # in the p, q choice matrix
-            obj_val = p_weight*ip + q_weight*iq + r_weight*ir
-            if obj_val >= max_val
-                max_val = obj_val
-                p = pval
-                q = qval
-                r = rval
-            end
-        end
-    end
-
-    return p, q, r
 end
 
 # Run_option - # [1]test [2]profile [3]benchmark
@@ -1639,4 +1470,5 @@ end
 # main(3; nt=2^12, ns=2^12, algorithm=9, padding=false, show_pq=true)
 # main(1; ns=8739, nt=3884, debug=true)
 # main(1; nt=2^9, ns=2^12, algorithm=3, padding=false)
-# main(3; nt=7^1, ns=2^12, p=7, q=32, r=512, algorithm=9, padding=false)
+main(1; nt=2^9, ns=2^10, algorithm=7, padding=false, show_pq=true)
+main(1; nt=2^9, ns=2^10, algorithm=9, padding=false, show_pq=true)
