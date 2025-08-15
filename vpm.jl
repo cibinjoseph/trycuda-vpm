@@ -763,16 +763,6 @@ function gpu_vpm7!(out, s, t, p, q, kernel)
     # Sum up accelerations for each target/thread
     # Each target will be accessed by q no. of threads
     if itarget <= t_size
-        # idim = 1i32
-        # while idim <= 3i32
-        #     @inbounds CUDA.@atomic t[9i32+idim, itarget] += UJ[idim]
-        #     idim += 1i32
-        # end
-        # idim = 4i32
-        # while idim <= 12i32
-        #     @inbounds CUDA.@atomic t[12i32+idim, itarget] += UJ[idim]
-        #     idim += 1i32
-        # end
         idim = 1i32
         while idim <= 12i32
             @inbounds CUDA.@atomic out[idim, itarget] += UJ[idim]
@@ -1047,6 +1037,107 @@ function gpu_vpm10!(out, s, t, p, q, kernel)
     return
 end
 
+# gpu_vpm7 but with AD
+function gpu_vpm11!(out, s, t, p, q, kernel)
+    t_size::Int32 = size(t, 2)
+    s_size::Int32 = size(s, 2)
+
+    ithread::Int32 = threadIdx().x
+
+    # Row and column indices of threads in a block
+    row::Int32 = (ithread-1i32) % p + 1i32
+    col::Int32 = floor(Int32, (ithread-1i32)/p) + 1i32
+
+    itarget::Int32 = row + (blockIdx().x-1i32)*p
+    if itarget <= t_size
+        @inbounds tx = t[1i32, itarget]
+        @inbounds ty = t[2i32, itarget]
+        @inbounds tz = t[3i32, itarget]
+    end
+
+    n_tiles::Int32 = CUDA.ceil(Int32, s_size / p)
+    bodies_per_col::Int32 = CUDA.ceil(Int32, p / q)
+
+    sh_mem = CuDynamicSharedArray(eltype(t), (8, p))
+
+    # Variable initialization
+    UJ = @MVector zeros(eltype(t), 12)
+    idim::Int32 = 0
+    isource::Int32 = 0
+    i::Int32 = 0
+
+    itile::Int32 = 1
+    while itile <= n_tiles
+        # Each thread will copy source coordinates corresponding to its index into shared memory. This will be done for each tile.
+        if (col == 1i32)
+            isource = row + (itile-1i32)*p
+            idim = 1i32
+            if isource <= s_size
+                while idim <= 7i32
+                    @inbounds sh_mem[idim, row] = s[idim, isource]
+                    idim += 1i32
+                end
+            else
+                while idim <= 7i32
+                    @inbounds sh_mem[idim, row] = zero(eltype(s))
+                    idim += 1i32
+                end
+            end
+        end
+        sync_threads()
+
+        # Each thread will compute the influence of all the sources in the shared memory on the target corresponding to its index
+        i = 1i32
+        while i <= bodies_per_col
+            isource = i + bodies_per_col*(col-1i32)
+            if isource <= p
+                if itarget <= t_size
+                    gpu_interaction!(UJ, tx, ty, tz, sh_mem, isource, kernel)
+                end
+            end
+            i += 1i32
+        end
+        itile += 1i32
+        sync_threads()
+    end
+
+    # Sum up accelerations for each target/thread
+    # Each target will be accessed by q no. of threads
+    # if itarget <= t_size
+    #     idim = 1i32
+    #     while idim <= 12i32
+    #         @inbounds CUDA.@atomic out[idim, itarget] += UJ[idim]
+    #         idim += 1i32
+    #     end
+    # end
+
+    # Write UJ to shared memory to prep for addition
+    idim = 1i32
+    while idim <= 12i32
+        sh_mem[col, row] = UJ[idim]
+        sync_threads()
+
+        if col == 1i32
+            i = 2i32
+            while i <= q
+                UJ[idim] += sh_mem[i, row]
+                i += 1i32
+            end
+            if itarget <= t_size
+                out[idim, itarget] += UJ[idim]
+            end
+        end
+        sync_threads()
+
+        idim += 1i32
+    end
+
+    return
+end
+
+#######################
+# BENCHMARK FUNCTIONS #
+#######################
 
 function benchmark1_gpu!(s, t)
     s_d = CuArray(view(s, 1:7, :))
@@ -1290,6 +1381,30 @@ function benchmark10_gpu!(s, t, p, q; t_padding=0)
     t[16:24, :] .+= Array(view(o_d, 4:12, :))
 end
 
+function benchmark11_gpu!(s, t, p, q; t_padding=0)
+    s_d = CuArray(view(s, 1:7, :))
+    t_d = CuArray(view(t, 1:3, :))
+
+    nt = size(t, 2)
+    t_size = nt+t_padding
+    kernel = vpm_kernel
+
+    # Num of threads in a tile should always be 
+    # less than number of threads in a block (1024)
+    # or limited by memory size
+    threads::Int32 = p*q
+    blocks::Int32 = cld(t_size, p)
+    shmem::Int32 = sizeof(eltype(s)) * 8 * p  # XYZ + Γ123 + σ = 7 variables
+    UJ_d = CUDA.zeros(eltype(s), 12, nt)
+
+    p = Int32(p)
+    q = Int32(q)
+    @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm11!(UJ_d, s_d, t_d, p, q, kernel)
+
+    @inbounds t[10:12, 1:nt] .+= Array(view(UJ_d, 1:3, 1:nt))
+    @inbounds t[16:24, 1:nt] .+= Array(view(UJ_d, 4:12, 1:nt))
+end
+
 function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true, productmax=default_productmax, algorithm=3, show_pq=false, return_vals=false, compare_cpu=true, multiple32=true)
     T = Float64
 
@@ -1345,6 +1460,8 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
                 benchmark9_gpu!(src2, trg2, p, q, r; t_padding=t_padding)
             elseif algorithm == 10
                 benchmark10_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            elseif algorithm == 11
+                benchmark11_gpu!(src2, trg2, p, q; t_padding=t_padding)
             else
                 @error "Invalid algorithm selected"
             end
@@ -1395,6 +1512,8 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
                 CUDA.@profile benchmark9_gpu!(src2, trg2, p, q, r; t_padding=t_padding)
             elseif algorithm == 10
                 CUDA.@profile benchmark10_gpu!(src2, trg2, p, q; t_padding=t_padding)
+            elseif algorithm == 11
+                CUDA.@profile benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
             else
                 @error "Invalid algorithm selected"
             end
@@ -1430,6 +1549,8 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             t_gpu = @benchmark benchmark9_gpu!($src2, $trg2, $p, $q, $r; t_padding=$t_padding)
         elseif algorithm == 10
             t_gpu = @benchmark benchmark10_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
+        elseif algorithm == 11
+            t_gpu = @benchmark benchmark11_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
         else
             @error "Invalid algorithm selected"
         end
@@ -1470,5 +1591,6 @@ end
 # main(3; nt=2^12, ns=2^12, algorithm=9, padding=false, show_pq=true)
 # main(1; ns=8739, nt=3884, debug=true)
 # main(1; nt=2^9, ns=2^12, algorithm=3, padding=false)
-main(1; nt=2^9, ns=2^10, algorithm=7, padding=false, show_pq=true)
-main(1; nt=2^9, ns=2^10, algorithm=9, padding=false, show_pq=true)
+# main(3; nt=2^10, ns=2^10, algorithm=7, padding=false, show_pq=true)
+# main(3; nt=2^13, ns=2^13, p=32, q=4, r=1, algorithm=7, padding=false, show_pq=true)
+# main(3; nt=2^13, ns=2^13, p=32, q=4, r=1, algorithm=11, padding=false, show_pq=true)
