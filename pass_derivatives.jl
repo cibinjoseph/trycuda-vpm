@@ -12,7 +12,7 @@ function get_net_interaction_cpu(x::Vector{T}) where T
     gammaZ = x[4]
     sigma  = x[5]
 
-    nparticles, nfields = 10, 43
+    nparticles, nfields = 2^12, 43
 
     theta = LinRange{Float32}(0, 2*pi, nparticles+1)[1:end-1]
 
@@ -48,30 +48,30 @@ function cpu_func!(y, x)
     return
 end
 
-function gpu_func!(y, x)
-    idx::Int32 = threadIdx().x + (blockIdx().x-1)*blockDim().x
-
-    @cushow typeof(x)
-
-    if idx <= length(x)
-        y[idx] = x[idx]*x[idx] + 2.0f0
-    end
-    return
-end
-
-function gpu_runner!(y::Vector{T}, x::Vector{T}) where T
-    x_d = CuArray(view(x, :, :))
-    y_d = similar(x_d)
-    kernel = gpu_g_dgdr
-    n = length(x)
-    p, q = get_launch_config(n; T=T)
-    nthreads::Int32 = p*q
-    nblocks::Int32 = cld(n, p)
-    CUDA.@sync @cuda threads=nthreads blocks=nblocks gpu_vpm3!(y_d, x_d, q, kernel)
-    y[10:12] .= Array(y_d[10:12, :])
-    y[16:24] .= Array(y_d[16:24, :])
-    return
-end
+# function gpu_func!(y, x)
+#     idx::Int32 = threadIdx().x + (blockIdx().x-1)*blockDim().x
+#
+#     @cushow typeof(x)
+#
+#     if idx <= length(x)
+#         y[idx] = x[idx]*x[idx] + 2.0f0
+#     end
+#     return
+# end
+#
+# function gpu_runner!(y::Vector{T}, x::Vector{T}) where T
+#     x_d = CuArray(view(x, :, :))
+#     y_d = similar(x_d)
+#     kernel = gpu_g_dgdr
+#     n = length(x)
+#     p, q, _ = optimal_pq(n)
+#     nthreads::Int32 = p*q
+#     nblocks::Int32 = cld(n, p)
+#     CUDA.@sync @cuda threads=nthreads blocks=nblocks gpu_vpm3!(y_d, x_d, q, kernel)
+#     y[10:12] .= Array(y_d[10:12, :])
+#     y[16:24] .= Array(y_d[16:24, :])
+#     return
+# end
 
 # CPU gravitation kernel
 T = Float64
@@ -90,7 +90,7 @@ x_gpu = deepcopy(x)
 # df_gpu = ForwardDiff.jacobian(gpu_runner!, y, x)
 # @assert isapprox(df_cpu, df_gpu; atol=tol)
 
-# GPU gravitation kernel
+# VPM gravitation kernel
 function get_net_interaction_gpu(x::Vector{T}) where T
     radius = x[1]
     gammaX = x[2]
@@ -98,7 +98,7 @@ function get_net_interaction_gpu(x::Vector{T}) where T
     gammaZ = x[4]
     sigma  = x[5]
 
-    nparticles, nfields = 10, 43
+    nparticles, nfields = 2^12, 43
 
     theta = LinRange(0, 2*pi, nparticles+1)[1:end-1]
 
@@ -114,24 +114,27 @@ function get_net_interaction_gpu(x::Vector{T}) where T
         src[7, i] = sigma
     end
 
-    s_d = CuArray(view(src, 1:24, :))
+    s_d = CuArray(view(src, 1:7, :))
+    t_d = CuArray(view(src, 1:3, :))
+    out = CUDA.zeros(T, 12, nparticles)
 
 
     kernel = gpu_g_dgdr
-    p, q = get_launch_config(nparticles; T=T)
+    p, q = optimal_pq(nparticles)
+    p = 2^4
     nthreads::Int32 = p*q
     nblocks::Int32 = cld(nparticles, p)
-    shmem = sizeof(T) * (12*p) * p
+    shmem = sizeof(T) * 8 * p
 
     # Check if shared memory is sufficient
     dev = CUDA.device()
     dev_shmem = CUDA.attribute(dev, CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK)
     if shmem > dev_shmem
-        error("Shared memory requested exceeds available space on GPU")
+        error("Shared memory requested ($shmem) exceeds available space on GPU ($dev_shmem)")
     end
-    CUDA.@sync @cuda threads=nthreads blocks=nblocks shmem=shmem gpu_vpm5!(s_d, s_d, q, kernel)
-    view(src, 10:12, :) .= Array(s_d[10:12, :])
-    view(src, 16:24, :) .= Array(s_d[16:24, :])
+    CUDA.@sync @cuda threads=nthreads blocks=nblocks shmem=shmem gpu_vpm11!(out, t_d, s_d, p, q, kernel)
+    src[10:12, 1:nparticles] .+= Array(out[1:3, 1:nparticles])
+    src[16:24, 1:nparticles] .+= Array(out[4:12, 1:nparticles])
 
     vel = zero(T)
     for j in 1:nparticles
