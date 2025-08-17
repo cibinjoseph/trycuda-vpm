@@ -1102,29 +1102,23 @@ function gpu_vpm11!(out, s, t, p, q, kernel)
     end
 
     # Sum up accelerations for each target/thread
-    # Each target will be accessed by q no. of threads
-    # if itarget <= t_size
-    #     idim = 1i32
-    #     while idim <= 12i32
-    #         @inbounds CUDA.@atomic out[idim, itarget] += UJ[idim]
-    #         idim += 1i32
-    #     end
-    # end
-
-    # Write UJ to shared memory to prep for addition
+    # This is a replacement to the @atomic operation.
     idim = 1i32
     while idim <= 12i32
-        sh_mem[col, row] = UJ[idim]
+        # Write UJ to shared memory to prep for addition
+        @inbounds sh_mem[col, row] = UJ[idim]
         sync_threads()
 
         if col == 1i32
             i = 2i32
+            # Sum up UJ values from shared memory to col 1 UJ
             while i <= q
-                UJ[idim] += sh_mem[i, row]
+                @inbounds UJ[idim] += sh_mem[i, row]
                 i += 1i32
             end
+            # Write to output
             if itarget <= t_size
-                out[idim, itarget] += UJ[idim]
+                @inbounds out[idim, itarget] += UJ[idim]
             end
         end
         sync_threads()
