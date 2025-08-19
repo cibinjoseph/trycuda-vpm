@@ -1,9 +1,15 @@
 using FiniteDiff
 using ForwardDiff
+using Random
+
+Random.seed!(1)
 
 include("vpm.jl")
 
 tol = 1f-4  # Difference b/w finite diff and forward diff
+nparticles_global = 2^12
+const nfields = 43
+const kernel = g_dgdr_wnklmns
 
 function get_net_interaction_cpu(x::Vector{T}) where T
     radius = x[1]
@@ -12,7 +18,7 @@ function get_net_interaction_cpu(x::Vector{T}) where T
     gammaZ = x[4]
     sigma  = x[5]
 
-    nparticles, nfields = 2^12, 43
+    nparticles = nparticles_global
 
     theta = LinRange{Float32}(0, 2*pi, nparticles+1)[1:end-1]
 
@@ -32,9 +38,7 @@ function get_net_interaction_cpu(x::Vector{T}) where T
 
     vel = zero(T)
     for j in 1:nparticles
-        for i in 5:7
-            vel += src[i, j]^2
-        end
+        vel += sqrt(sum(src[10:12, j].^2))
     end
 
     return vel
@@ -98,7 +102,7 @@ function get_net_interaction_gpu(x::Vector{T}) where T
     gammaZ = x[4]
     sigma  = x[5]
 
-    nparticles, nfields = 2^12, 43
+    nparticles = nparticles_global
 
     theta = LinRange(0, 2*pi, nparticles+1)[1:end-1]
 
@@ -119,9 +123,7 @@ function get_net_interaction_gpu(x::Vector{T}) where T
     out = CUDA.zeros(T, 12, nparticles)
 
 
-    kernel = gpu_g_dgdr
     p, q = optimal_pq(nparticles)
-    p = 2^4
     nthreads::Int32 = p*q
     nblocks::Int32 = cld(nparticles, p)
     shmem = sizeof(T) * 8 * p
@@ -132,15 +134,13 @@ function get_net_interaction_gpu(x::Vector{T}) where T
     if shmem > dev_shmem
         error("Shared memory requested ($shmem) exceeds available space on GPU ($dev_shmem)")
     end
-    CUDA.@sync @cuda threads=nthreads blocks=nblocks shmem=shmem gpu_vpm11!(out, t_d, s_d, p, q, kernel)
+    @cuda threads=nthreads blocks=nblocks shmem=shmem gpu_vpm11!(out, s_d, t_d, p, q, kernel)
     src[10:12, 1:nparticles] .+= Array(out[1:3, 1:nparticles])
     src[16:24, 1:nparticles] .+= Array(out[4:12, 1:nparticles])
 
     vel = zero(T)
     for j in 1:nparticles
-        for i in 5:7
-            vel += src[i, j]^2
-        end
+        vel += sqrt(sum(src[10:12, j].^2))
     end
 
     return vel
@@ -148,7 +148,10 @@ end
 
 @show get_net_interaction_gpu(x_gpu)
 
-cfg1 = ForwardDiff.GradientConfig(get_net_interaction_gpu, x_gpu, ForwardDiff.Chunk{4}());
+# @show ForwardDiff.pickchunksize(length(x))
+# cfg1 = ForwardDiff.GradientConfig(get_net_interaction_gpu, x_gpu, ForwardDiff.Chunk{4}());
 @show df_ad = ForwardDiff.gradient(get_net_interaction_gpu, x_gpu, cfg1)
 # @show df_fd = FiniteDiff.finite_difference_gradient(get_net_interaction_gpu, x_gpu)
 # @assert isapprox(df_ad, df_fd; atol=tol)
+#
+return
