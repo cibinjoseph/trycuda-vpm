@@ -145,11 +145,11 @@ function benchmark_AD(ncoeffs)
     # @show vel = get_net_interaction_cpu(x)
     vel = get_net_interaction_cpu(x)
     result_cpu = @benchmark get_net_interaction_cpu($x)
-    t_cpu = median(result_cpu.times)
+    t_cpu = median(result_cpu.times) / 1e9
 
     df_ad = ForwardDiff.gradient(get_net_interaction_cpu, x)
     result_cpuAD = @benchmark ForwardDiff.gradient($get_net_interaction_cpu, $x)
-    t_cpuAD = median(result_cpuAD.times)
+    t_cpuAD = median(result_cpuAD.times) / 1e9
 
     # @show df_fd = FiniteDiff.finite_difference_gradient(get_net_interaction_cpu, x)
     # @assert isapprox(df_ad, df_fd; atol=tol)
@@ -159,13 +159,13 @@ function benchmark_AD(ncoeffs)
     ############
     vel = get_net_interaction_gpu(x_gpu)
     result_gpu = @benchmark get_net_interaction_gpu($x_gpu)
-    t_gpu = median(result_gpu.times)
+    t_gpu = median(result_gpu.times) / 1e9
 
     # @show ForwardDiff.pickchunksize(length(x))
     # cfg1 = ForwardDiff.GradientConfig(get_net_interaction_gpu, x_gpu, ForwardDiff.Chunk{4}());
     df_ad = ForwardDiff.gradient(get_net_interaction_gpu, x_gpu)
-    result_gpuAD = @benchmark ForwardDiff.gradient(get_net_interaction_gpu, x_gpu)
-    t_gpuAD = median(result_gpuAD.times)
+    result_gpuAD = @benchmark ForwardDiff.gradient($get_net_interaction_gpu, $x_gpu)
+    t_gpuAD = median(result_gpuAD.times) / 1e9
 
     # @show df_fd = FiniteDiff.finite_difference_gradient(get_net_interaction_gpu, x_gpu)
     # @assert isapprox(df_ad, df_fd; atol=tol)
