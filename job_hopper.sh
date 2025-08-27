@@ -28,5 +28,5 @@ export OMP_NUM_THREADS=$SLURM_CPUS_ON_NODE
 # julia --project=. benchmark_pq.jl 40000 | tee out40000_hop.csv
 
 
-julia --project=. benchmark_pqr2.jl | tee pqr512_pq_hop.csv
-julia --project=. benchmark_pqr2.jl 1024 | tee pqr1024_pq_hop.csv
+julia --project=. benchmark_pqr2.jl | tee pqr512_p2_hop.csv
+julia --project=. benchmark_pqr2.jl 1024 | tee pqr1024_p2_hop.csv
