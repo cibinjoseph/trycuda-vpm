@@ -107,8 +107,16 @@ function get_net_interaction_gpu(x::Vector{T}) where T
     t_d = CuArray(view(src, 1:3, :))
     out = CUDA.zeros(T, 12, nparticles)
 
-
+    # Verify max threads per block limit
     p, q = optimal_pq(nparticles)
+    k = @cuda launch=false gpu_vpm11!(out, s_d, t_d, p, q, kernel)
+    maxthreads = CUDA.maxthreads(k)
+    if maxthreads < 512
+        @warn "Max threads lowered to $maxthreads due to high register pressure"
+    end
+
+
+    p, q = optimal_pq(nparticles; productmax=maxthreads)
     nthreads::Int32 = p*q
     nblocks::Int32 = cld(nparticles, p)
     shmem = sizeof(T) * 8 * p
@@ -119,6 +127,7 @@ function get_net_interaction_gpu(x::Vector{T}) where T
     if shmem > dev_shmem
         error("Shared memory requested ($shmem) exceeds available space on GPU ($dev_shmem)")
     end
+
     @cuda threads=nthreads blocks=nblocks shmem=shmem gpu_vpm11!(out, s_d, t_d, p, q, kernel)
     @inbounds src[10:12, 1:nparticles] .+= Array(out[1:3, 1:nparticles])
     @inbounds src[16:24, 1:nparticles] .+= Array(out[4:12, 1:nparticles])
@@ -133,7 +142,6 @@ end
 
 # Set up variables
 function benchmark_AD(ncoeffs)
-    ncoeffs = 5
     xe, ye, coeffs = get_coeffs(ncoeffs)
 
     x = coeffs
@@ -161,8 +169,9 @@ function benchmark_AD(ncoeffs)
     result_gpu = @benchmark get_net_interaction_gpu($x_gpu)
     t_gpu = median(result_gpu.times) / 1e9
 
-    # @show ForwardDiff.pickchunksize(length(x))
-    # cfg1 = ForwardDiff.GradientConfig(get_net_interaction_gpu, x_gpu, ForwardDiff.Chunk{4}());
+    # chunk_size = ForwardDiff.pickchunksize(length(x))
+    # @info "Auto chunk size = $chunk_size"
+    # cfg1 = ForwardDiff.GradientConfig(get_net_interaction_gpu, x_gpu, ForwardDiff.Chunk{1}());
     df_ad = ForwardDiff.gradient(get_net_interaction_gpu, x_gpu)
     result_gpuAD = @benchmark ForwardDiff.gradient($get_net_interaction_gpu, $x_gpu)
     t_gpuAD = median(result_gpuAD.times) / 1e9
@@ -175,13 +184,25 @@ function benchmark_AD(ncoeffs)
 end
 
 
-nparticles_global = 2^4 * 2
-nstate_list = 1:5
-data = zeros(length(nstate_list), 5)
+nparticles_global = 2^4 * 2^12
+# nstate_list = 1:5
+# data = zeros(length(nstate_list), 5)
 
-for i in 1:length(nstate_list)
-    data[i, :] .= benchmark_AD(nstate_list[i])
-    @show i, data[i, :]
-end
+# for i in 1:length(nstate_list)
+#     data[i, :] .= benchmark_AD(nstate_list[i])
+#     @show i, data[i, :]
+# end
 
-writedlm("output.csv", data, ' ')
+# writedlm("output.csv", data, ' ')
+
+ncoeffs = 20
+# benchmark_AD(ncoeffs)
+
+xe, ye, coeffs = get_coeffs(ncoeffs)
+
+x = coeffs
+x_gpu = deepcopy(x)
+vel = get_net_interaction_gpu(x_gpu)
+
+df_ad = ForwardDiff.gradient(get_net_interaction_gpu, x_gpu)
+
