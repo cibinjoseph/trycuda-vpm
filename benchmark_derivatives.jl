@@ -4,13 +4,13 @@ using Random
 using Plots
 using Polynomials
 using BenchmarkTools
+using DelimitedFiles
 
 Random.seed!(1)
 
 include("vpm.jl")
 
 tol = 1f-4  # Difference b/w finite diff and forward diff
-nparticles_global = 2^4 * 2^10
 const nfields = 43
 const kernel = g_dgdr_wnklmns
 
@@ -175,4 +175,13 @@ function benchmark_AD(ncoeffs)
 end
 
 
-res = benchmark_AD(5)
+nparticles_global = 2^4 * 2
+nstate_list = 1:5
+data = zeros(length(nstate_list), 5)
+
+for i in 1:length(nstate_list)
+    data[i, :] .= benchmark_AD(nstate_list[i])
+    @show i, data[i, :]
+end
+
+writedlm("output.csv", data, ' ')
