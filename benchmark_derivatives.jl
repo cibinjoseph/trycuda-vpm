@@ -48,14 +48,12 @@ function create_distribution!(src, coeffs; nx=16)
 end
 
 # CPU interaction kernel
-function get_net_interaction_cpu(x::Vector{T}) where T
+function get_net_interaction_cpu(x::Vector{T}, nparticles::Int) where T
     coeffs = x
     gammaX = 0.5
     gammaY = 0.5
     gammaZ = 0.5
     sigma  = 0.05
-
-    nparticles = nparticles_global
 
     src = zeros(T, nfields, nparticles)
 
@@ -81,14 +79,12 @@ function get_net_interaction_cpu(x::Vector{T}) where T
 end
 
 # VPM gravitation kernel
-function get_net_interaction_gpu(x::Vector{T}) where T
+function get_net_interaction_gpu(x::Vector{T}, nparticles::Int) where T
     coeffs = x
     gammaX = 0.5
     gammaY = 0.5
     gammaZ = 0.5
     sigma  = 0.05
-
-    nparticles = nparticles_global
 
     src = zeros(T, nfields, nparticles)
 
@@ -141,42 +137,46 @@ function get_net_interaction_gpu(x::Vector{T}) where T
 end
 
 # Set up variables
-function benchmark_AD(ncoeffs)
+function benchmark_AD(ncoeffs, nparticles)
     xe, ye, coeffs = get_coeffs(ncoeffs)
 
     x = coeffs
     x_gpu = deepcopy(x)
 
+    # Closures for AD to pass
+    cpu_func = x -> get_net_interaction_cpu(x, nparticles)
+    gpu_func = x -> get_net_interaction_gpu(x, nparticles)
+
     ############
     # CPU call #
     ############
-    # @show vel = get_net_interaction_cpu(x)
-    vel = get_net_interaction_cpu(x)
-    result_cpu = @benchmark get_net_interaction_cpu($x)
+    # @show vel = cpu_func(x)
+    vel = cpu_func(x)
+    result_cpu = @benchmark cpu_func($x)
     t_cpu = median(result_cpu.times) / 1e9
 
-    df_ad = ForwardDiff.gradient(get_net_interaction_cpu, x)
-    result_cpuAD = @benchmark ForwardDiff.gradient($get_net_interaction_cpu, $x)
+    df_ad = ForwardDiff.gradient(cpu_func, x)
+    result_cpuAD = @benchmark ForwardDiff.gradient($cpu_func, $x)
     t_cpuAD = median(result_cpuAD.times) / 1e9
 
-    # @show df_fd = FiniteDiff.finite_difference_gradient(get_net_interaction_cpu, x)
+    # @show df_fd = FiniteDiff.finite_difference_gradient(cpu_func, x)
     # @assert isapprox(df_ad, df_fd; atol=tol)
 
     ############
     # GPU call #
     ############
-    vel = get_net_interaction_gpu(x_gpu)
-    result_gpu = @benchmark get_net_interaction_gpu($x_gpu)
+    vel = gpu_func(x_gpu)
+    result_gpu = @benchmark gpu_func($x_gpu)
     t_gpu = median(result_gpu.times) / 1e9
 
     # chunk_size = ForwardDiff.pickchunksize(length(x))
     # @info "Auto chunk size = $chunk_size"
-    # cfg1 = ForwardDiff.GradientConfig(get_net_interaction_gpu, x_gpu, ForwardDiff.Chunk{1}());
-    df_ad = ForwardDiff.gradient(get_net_interaction_gpu, x_gpu)
-    result_gpuAD = @benchmark ForwardDiff.gradient($get_net_interaction_gpu, $x_gpu)
+    # cfg1 = ForwardDiff.GradientConfig(gpu_func, x_gpu, ForwardDiff.Chunk{1}());
+    df_ad = ForwardDiff.gradient(gpu_func, x_gpu)
+    result_gpuAD = @benchmark ForwardDiff.gradient($gpu_func, $x_gpu)
     t_gpuAD = median(result_gpuAD.times) / 1e9
 
-    # @show df_fd = FiniteDiff.finite_difference_gradient(get_net_interaction_gpu, x_gpu)
+    # @show df_fd = FiniteDiff.finite_difference_gradient(gpu_func, x_gpu)
     # @assert isapprox(df_ad, df_fd; atol=tol)
     #
 
@@ -184,7 +184,12 @@ function benchmark_AD(ncoeffs)
 end
 
 
-nparticles_global = 2^4 * 2^12
+nparticles = 2^4 * 2^12
+
+# Closures
+cpu_func = x -> get_net_interaction_cpu(x, nparticles)
+gpu_func = x -> get_net_interaction_gpu(x, nparticles)
+
 # nstate_list = 1:5
 # data = zeros(length(nstate_list), 5)
 
@@ -202,7 +207,6 @@ xe, ye, coeffs = get_coeffs(ncoeffs)
 
 x = coeffs
 x_gpu = deepcopy(x)
-vel = get_net_interaction_gpu(x_gpu)
+vel = gpu_func(x_gpu)
 
-df_ad = ForwardDiff.gradient(get_net_interaction_gpu, x_gpu)
-
+df_ad = ForwardDiff.gradient(gpu_func, x_gpu)
