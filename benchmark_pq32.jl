@@ -1,7 +1,7 @@
 using Primes
 using StaticArrays
 include("vpm.jl")
-include("divs_512.jl")
+include("divs_lookup.jl")
 
 # Read input arg if available
 n_default = 5000

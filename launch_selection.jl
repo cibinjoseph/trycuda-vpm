@@ -25,18 +25,22 @@ function partial_divisors(n; maxdiv=512)
     return sort!(divs)
 end
 
-include("divs_512.jl")
+include("divs_lookup.jl")
 function closest_tuple_32(p, q; productmax=512, dist_threshold=10)
-    if productmax == 512
+    if (productmax == 512 || productmax == 480 || productmax == 384 ||
+        productmax == 256 || productmax == 128)
+
+        divs_mat = divs_lookup[productmax]
+
         dist_min = 1000
         popt = p
         qopt = q
-        for i in 1:size(divs_512, 2)
-            dist = (divs_512[1, i]-p)^2 + (divs_512[2, i]-q)^2
+        for i in 1:size(divs_mat, 2)
+            dist = (divs_mat[1, i]-p)^2 + (divs_mat[2, i]-q)^2
             if dist <= dist_threshold && dist <= dist_min
                 dist_min = dist
-                popt = divs_512[1, i]
-                qopt = divs_512[2, i]
+                popt = divs_mat[1, i]
+                qopt = divs_mat[2, i]
             end
         end
     else

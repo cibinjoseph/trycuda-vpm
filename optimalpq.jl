@@ -13,6 +13,15 @@ function get_pq(productmax=512, multiple=32)
     return pq
 end
 
+function write_pq(filename, productmax=512, multiple=32)
+    pq = get_pq(productmax, multiple)
+    p = [t[1] for t in pq]
+    q = [t[2] for t in pq]
+    pq_mat = [p'; q']
+
+    writedlm(filename, pq_mat, ' ')
+end
+
 function get_all_pq(n)
     divs = sort(partial_divisors(n; maxdiv=n))
     pq = Vector{Tuple{Int, Int}}()
