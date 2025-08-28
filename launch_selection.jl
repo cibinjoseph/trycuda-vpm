@@ -44,8 +44,8 @@ function closest_tuple_32(p, q; productmax=512, dist_threshold=10)
             end
         end
     else
-        @warn "This function is hardcoded for productmax=512.
-        # multiple32=true will be ignored."
+        @warn "This function is not available for productmax=$productmax.
+        multiple32=true will be ignored."
         popt, qopt = p, q
     end
     return popt, qopt
