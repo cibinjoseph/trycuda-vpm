@@ -9,6 +9,7 @@ using DelimitedFiles
 Random.seed!(1)
 
 include("vpm.jl")
+include("benchmark_extras.jl")
 
 tol = 1f-4  # Difference b/w finite diff and forward diff
 const nfields = 43
@@ -152,7 +153,7 @@ function benchmark_AD(ncoeffs, nparticles)
     ############
     # @show vel = cpu_func(x)
     vel = cpu_func(x)
-    result_cpu = @benchmark cpu_func($x)
+    result_cpu = @benchmark $cpu_func($x)
     t_cpu = median(result_cpu.times) / 1e9
 
     df_ad = ForwardDiff.gradient(cpu_func, x)
@@ -166,7 +167,7 @@ function benchmark_AD(ncoeffs, nparticles)
     # GPU call #
     ############
     vel = gpu_func(x_gpu)
-    result_gpu = @benchmark gpu_func($x_gpu)
+    result_gpu = @benchmark $gpu_func($x_gpu)
     t_gpu = median(result_gpu.times) / 1e9
 
     # chunk_size = ForwardDiff.pickchunksize(length(x))
@@ -180,33 +181,42 @@ function benchmark_AD(ncoeffs, nparticles)
     # @assert isapprox(df_ad, df_fd; atol=tol)
     #
 
-    return ncoeffs, t_cpu, t_gpu, t_cpuAD, t_gpuAD
+    return nparticles, ncoeffs, t_cpu, t_gpu, t_cpuAD, t_gpuAD
 end
 
 
-nparticles = 2^4 * 2^12
+# Quick check
+# nparticles = 2^4 * 2^12
+# ncoeffs = 20
 
-# Closures
-cpu_func = x -> get_net_interaction_cpu(x, nparticles)
-gpu_func = x -> get_net_interaction_gpu(x, nparticles)
+# # Closures
+# cpu_func = x -> get_net_interaction_cpu(x, nparticles)
+# gpu_func = x -> get_net_interaction_gpu(x, nparticles)
 
-# nstate_list = 1:5
-# data = zeros(length(nstate_list), 5)
+# xe, ye, coeffs = get_coeffs(ncoeffs)
 
-# for i in 1:length(nstate_list)
-#     data[i, :] .= benchmark_AD(nstate_list[i])
-#     @show i, data[i, :]
-# end
+# x = coeffs
+# x_gpu = deepcopy(x)
+# vel = gpu_func(x_gpu)
 
-# writedlm("output.csv", data, ' ')
+# df_ad = ForwardDiff.gradient(gpu_func, x_gpu)
 
-ncoeffs = 20
-# benchmark_AD(ncoeffs)
+# Benchmarking
+ncoeffs_list = 1:2
+nparticles_list = 2^4 * (2 .^ collect(6:16))
+filename = "output.csv"
 
-xe, ye, coeffs = get_coeffs(ncoeffs)
+data = zeros(6)
 
-x = coeffs
-x_gpu = deepcopy(x)
-vel = gpu_func(x_gpu)
+header = "ncoeffs nparticles t_cpu t_gpu t_cpuAD t_gpuAD"
+ensure_header(filename, header)
 
-df_ad = ForwardDiff.gradient(gpu_func, x_gpu)
+for nparticles in nparticles_list, ncoeffs in ncoeffs_list
+    if case_exists(filename, ncoeffs, nparticles)
+        @info "Skipping case: $ncoeffs, $nparticles"
+    else
+        data .= benchmark_AD(ncoeffs, nparticles)
+        append_result(filename, data)
+    end
+end
+
