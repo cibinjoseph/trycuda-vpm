@@ -32,7 +32,7 @@ end
 # 3) Append one result row immediately
 function append_row(path::AbstractString, row)
     open(path, "a") do io
-        println(io, join(row..., ' '))
+        writedlm(io, permutedims(collect(row)), ' ')
         flush(io)  # write-through so a crash preserves finished rows
     end
 end

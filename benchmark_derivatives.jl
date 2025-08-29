@@ -181,7 +181,7 @@ function benchmark_AD(ncoeffs, nparticles)
     # @assert isapprox(df_ad, df_fd; atol=tol)
     #
 
-    return nparticles, ncoeffs, t_cpu, t_gpu, t_cpuAD, t_gpuAD
+    return  ncoeffs, nparticles, t_cpu, t_gpu, t_cpuAD, t_gpuAD
 end
 
 
@@ -202,7 +202,7 @@ end
 # df_ad = ForwardDiff.gradient(gpu_func, x_gpu)
 
 # Benchmarking
-ncoeffs_list = 1:2
+ncoeffs_list = 1:20
 nparticles_list = 2^4 * (2 .^ collect(6:16))
 filename = "output.csv"
 
@@ -216,7 +216,7 @@ for nparticles in nparticles_list, ncoeffs in ncoeffs_list
         @info "Skipping case: $ncoeffs, $nparticles"
     else
         data .= benchmark_AD(ncoeffs, nparticles)
-        append_result(filename, data)
+        append_row(filename, data)
     end
 end
 
