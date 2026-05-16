@@ -1,24 +1,31 @@
-using CUDA
+using CUDA, MPI
 
-
-@inline function kernel!(a, idev)
+function kernel!(a, idev)
     a[idev] = idev
     return
 end
 
 function main()
-    ndev = length(CUDA.devices())
-    a  = zeros(ndev)
+    MPI.Init()
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+    nranks = MPI.Comm_size(comm)
 
-    a_d = CuArray(a)
+    CUDA.device!(rank % length(CUDA.devices()))
 
-    for idev in 1:ndev
-        CUDA.device!(idev-1)
-        @cuda threads=1 kernel!(a_d, idev)
-    end
+    a_d = CUDA.zeros(nranks)
+    @cuda threads=1 kernel!(a_d, rank + 1)
+    CUDA.synchronize()
+
     a = Array(a_d)
+    # Reduce across ranks if you want the full array on all ranks
+    MPI.Allreduce!(a, +, comm)
 
+    if rank == 0
+        println(a)
+    end
+
+    MPI.Finalize()
 end
 
 main()
-
