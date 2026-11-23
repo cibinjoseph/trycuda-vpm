@@ -1495,12 +1495,10 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             end
 
             if return_errors
-                for rows in (10:12, 16:24)
-                    metrics(rows) = (
-                                     L2   = norm(@view(diff[rows, :])) / norm(@view(trg[rows, :])),
-                                     Linf = maximum(@view(diff[rows, :])) / maximum(abs, @view(trg[rows, :]))
-                                    )
-                end
+                metrics(rows) = (
+                                 L2   = norm(@view(diff[rows, :])) / norm(@view(trg[rows, :])),
+                                 Linf = maximum(@view(diff[rows, :])) / maximum(abs, @view(trg[rows, :]))
+                                )
 
                 return (
                         velocity = metrics(10:12),
