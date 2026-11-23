@@ -4,6 +4,7 @@ using BenchmarkTools
 using Random
 using StaticArrays
 using Primes
+using LinearAlgebra
 import NVTX
 
 const eps2 = 1e-6
@@ -1404,7 +1405,7 @@ function benchmark11_gpu!(s, t, p, q; t_padding=0)
     @inbounds t[16:24, 1:nt] .+= Array(view(UJ_d, 4:12, 1:nt))
 end
 
-function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true, productmax=default_productmax, algorithm=3, show_pq=false, return_vals=false, compare_cpu=true, multiple32=true)
+function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true, productmax=default_productmax, algorithm=3, show_pq=false, return_vals=false, compare_cpu=true, multiple32=true, return_errors=false)
     T = Float64
 
     nt = nt==0 ? ns : nt
@@ -1466,8 +1467,9 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             end
 
             diff = abs.(trg .- trg2)
-            err_norm = sqrt(sum(abs2, diff)/length(diff))
+            err_rms = sqrt(sum(abs2, diff)/length(diff))
             diff_bool = diff .< eps(T)
+
             if all(diff_bool)
                 println("MATCHES")
             else
@@ -1489,8 +1491,23 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
                 n_diff = count(==(false), diff_bool)
                 n_total = size(trg, 1)*size(trg, 2)
                 println("$n_diff of $n_total elements DO NOT MATCH")
-                println("Error norm: $err_norm")
+                println("Error norm: $err_rms")
             end
+
+            if return_errors
+                for rows in (10:12, 16:24)
+                    metrics(rows) = (
+                                     L2   = norm(@view(diff[rows, :])) / norm(@view(trg[rows, :])),
+                                     Linf = maximum(@view(diff[rows, :])) / maximum(abs, @view(trg[rows, :]))
+                                    )
+                end
+
+                return (
+                        velocity = metrics(10:12),
+                        gradient = metrics(16:24)
+                       )
+            end
+
         else
             println("Running profiler...")
             if algorithm == 3
