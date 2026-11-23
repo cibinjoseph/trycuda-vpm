@@ -202,7 +202,7 @@ end
 # df_ad = ForwardDiff.gradient(gpu_func, x_gpu)
 
 # Benchmarking
-ncoeffs_list = 1:20
+ncoeffs_list = 1:64
 nparticles_list = 2^4 * (2 .^ collect(6:16))
 filename = "output.csv"
 
@@ -215,7 +215,13 @@ for nparticles in nparticles_list, ncoeffs in ncoeffs_list
     if case_exists(filename, ncoeffs, nparticles)
         @info "Skipping case: $ncoeffs, $nparticles"
     else
-        data .= benchmark_AD(ncoeffs, nparticles)
+        try
+            data .= benchmark_AD(ncoeffs, nparticles)
+        catch
+            data[1] = ncoeffs
+            data[2] = nparticles
+            data[3:end] .= 0.0
+        end
         append_row(filename, data)
     end
 end
