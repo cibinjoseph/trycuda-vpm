@@ -1394,6 +1394,11 @@ function benchmark11_gpu!(s, t, p, q; t_padding=0)
     p = Int32(p)
     q = Int32(q)
     @cuda threads=threads blocks=blocks shmem=shmem gpu_vpm11!(UJ_d, s_d, t_d, p, q, kernel)
+    # DEBUG
+    # kern=@cuda launch=false gpu_vpm11!(UJ_d, s_d, t_d, p, q, kernel)
+    # maxt = CUDA.maxthreads(kern)
+    # # println("threads = $threads")
+    # println("Max threads = $maxt")
 
     @inbounds t[10:12, 1:nt] .+= Array(view(UJ_d, 1:3, 1:nt))
     @inbounds t[16:24, 1:nt] .+= Array(view(UJ_d, 4:12, 1:nt))
