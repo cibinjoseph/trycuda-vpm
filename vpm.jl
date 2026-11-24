@@ -1267,7 +1267,7 @@ function prep8_gpu!(s, t)
 end
 
 function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
-        padding=true, productmax=default_productmax)
+        padding=true, productmax=default_productmax, multiple32=true)
 
     pfield_d = CuArray(view(pfield, 1:24, :))
     s_indices_d = CuArray(s_indices)
@@ -1460,7 +1460,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             elseif algorithm == 8
                 pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
                 benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
-                                padding=padding, productmax=productmax)
+                                padding=padding, productmax=productmax, multiple32=multiple32)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             elseif algorithm == 9
                 benchmark9_gpu!(src2, trg2, p, q, r; t_padding=t_padding)
@@ -1532,7 +1532,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
                 CUDA.@profile benchmark7_gpu!(src2, trg2, p, q; t_padding=t_padding)
             elseif algorithm == 8
                 pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-                CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices; padding=padding, productmax=productmax)
+                CUDA.@profile benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices; padding=padding, productmax=productmax, multiple32=multiple32)
                 trg2 .= view(pfield, :, 1:size(trg2, 2))
             elseif algorithm == 9
                 CUDA.@profile benchmark9_gpu!(src2, trg2, p, q, r; t_padding=t_padding)
@@ -1569,7 +1569,7 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             t_gpu = @benchmark benchmark7_gpu!($src2, $trg2, $p, $q; t_padding=$t_padding)
         elseif algorithm == 8
             pfield, tidx_min, tidx_max, s_indices = prep8_gpu!(src2, trg2)
-            t_gpu = @benchmark benchmark8_gpu!($pfield, $tidx_min, $tidx_max, $s_indices; padding=$padding, productmax=$productmax)
+            t_gpu = @benchmark benchmark8_gpu!($pfield, $tidx_min, $tidx_max, $s_indices; padding=$padding, productmax=$productmax, multiple32=$multiple32)
             trg2 .= view(pfield, :, 1:size(trg2, 2))
         elseif algorithm == 9
             t_gpu = @benchmark benchmark9_gpu!($src2, $trg2, $p, $q, $r; t_padding=$t_padding)
