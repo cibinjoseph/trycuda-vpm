@@ -1405,7 +1405,7 @@ function benchmark11_gpu!(s, t, p, q; t_padding=0)
     @inbounds t[16:24, 1:nt] .+= Array(view(UJ_d, 4:12, 1:nt))
 end
 
-function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true, productmax=default_productmax, algorithm=3, show_pq=false, return_vals=false, compare_cpu=true, multiple32=true, return_errors=false)
+function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true, productmax=default_productmax, algorithm=3, show_pq=false, return_vals=false, compare_cpu=true, multiple32=true, return_errors=false, verbose=true)
     T = Float64
 
     nt = nt==0 ? ns : nt
@@ -1424,10 +1424,12 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
         end
     end
     if run_option == 1 || run_option == 2
-        println("No. of sources: $ns")
-        println("No. of targets: $nt")
-        println("Tile length, p: $p")
-        println("Cols per tile, q: $q")
+        if verbose
+            println("No. of sources: $ns")
+            println("No. of targets: $nt")
+            println("Tile length, p: $p")
+            println("Cols per tile, q: $q")
+        end
 
         # if algorithm == 9
         #     check_launch(nt+t_padding, ns, p, q, r, productmax)
@@ -1437,10 +1439,14 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
 
         src, trg, src2, trg2 = get_inputs(ns, nfields; T=T, nt=nt)
         if run_option == 1
-            println("CPU Run")
+            if verbose
+                println("CPU Run")
+            end
             cpu_vpm!(src, trg)
 
-            println("GPU Run")
+            if verbose
+                println("GPU Run")
+            end
             if algorithm == 3
                 benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
             elseif algorithm == 4
@@ -1471,7 +1477,9 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             diff_bool = diff .< eps(T)
 
             if all(diff_bool)
-                println("MATCHES")
+                if verbose
+                    println("MATCHES")
+                end
             else
                 # Write to file to check errors
                 # writedlm("trg_cpu.dat", trg[10, :])
@@ -1490,8 +1498,10 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
                 end
                 n_diff = count(==(false), diff_bool)
                 n_total = size(trg, 1)*size(trg, 2)
-                println("$n_diff of $n_total elements DO NOT MATCH")
-                println("Error norm: $err_rms")
+                if verbose
+                    println("$n_diff of $n_total elements DO NOT MATCH")
+                    println("Error norm: $err_rms")
+                end
             end
 
             if return_errors
@@ -1507,7 +1517,9 @@ function main(run_option; ns=2^5, nt=0, p=0, q=1, r=0, debug=false, padding=true
             end
 
         else
-            println("Running profiler...")
+            if verbose
+                println("Running profiler...")
+            end
             if algorithm == 3
                 CUDA.@profile  benchmark3_gpu!(src2, trg2, p, q; t_padding=t_padding)
             elseif algorithm == 4
