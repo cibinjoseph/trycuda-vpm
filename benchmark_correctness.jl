@@ -18,7 +18,7 @@ end
 
 for algorithm in algorithm_list
     for ns in ns_list
-        errors = main(1; ns=ns, nt=nt, p=p, q=q, r=4, show_pq=false, debug=false,
+        errors = main(1; ns=ns, nt=nt, p=p, q=q, r=64, show_pq=false, debug=false,
                       algorithm=algorithm, padding=false, return_errors=true, verbose=false)
         v_L2 = errors.velocity.L2
         v_Linf = errors.velocity.Linf
