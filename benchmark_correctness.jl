@@ -2,9 +2,9 @@ include("vpm.jl")
 
 nt = 256
 ns_list = 2 .^ (8:2:20)
-algorithm_list = [7, 11]
+algorithm_list = [7, 8, 9, 11]
 p = 32
-q = 2
+q = 4
 output_file = "output_correctness.csv"  # set to nothing to skip writing
 
 header = "algorithm nt ns v_L2 v_Linf j_L2 j_Linf"
