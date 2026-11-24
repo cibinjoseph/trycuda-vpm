@@ -1303,7 +1303,7 @@ function benchmark8_gpu!(pfield, tidx_min, tidx_max, s_indices;
         end
 
         # Kernel launch config
-        p[i], q[i], _ = optimal_pq(step+t_padding; q_max=1, multiple32=multiple32)
+        p[i], q[i], _ = optimal_pq(step+t_padding; qmax=1, multiple32=multiple32)
         threads[i] = p[i]*q[i]
         blocks[i] = cld(step+t_padding, p[i])
 
